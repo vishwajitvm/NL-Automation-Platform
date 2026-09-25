@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
-from .db import get_active_automations, update_last_fired
+from .db import get_active_automations, update_last_fired, get_recent_host_agent_metric
 from .metrics import get_metric
 from .queue import enqueue_job
 
@@ -43,7 +43,15 @@ def check_and_fire_threshold_automations(custom_now: Optional[datetime] = None) 
         threshold_val = float(params.get("threshold", 80))
         comparator = params.get("comparator", ">=")
 
-        current_val = get_metric(metric_name)
+        # Check if host agent pushed this metric recently, otherwise fall back to mock endpoint
+        metric_source = "mock_fallback"
+        host_metric = get_recent_host_agent_metric(metric_name, max_age_seconds=60)
+        if host_metric is not None:
+            current_val = host_metric
+            metric_source = "host_agent"
+        else:
+            current_val = get_metric(metric_name)
+
         condition_met = evaluate_threshold_condition(current_val, comparator, threshold_val)
 
         if not condition_met:
@@ -62,11 +70,15 @@ def check_and_fire_threshold_automations(custom_now: Optional[datetime] = None) 
                 continue
 
         # Condition met and outside cooldown window: fire!
-        action_name = action.get("name", "empty_recycle_bin")
+        action_name = action.get("name", "empty_trash")
         action_params = action.get("params", {})
-        enqueue_job(auto_id, now, action_name, action_params, trigger_info=trigger)
+        trigger_info_copy = dict(trigger)
+        trigger_info_copy["metric_source"] = metric_source
+        trigger_info_copy["current_val"] = current_val
+
+        enqueue_job(auto_id, now, action_name, action_params, trigger_info=trigger_info_copy)
         update_last_fired(auto_id, now)
         fired_ids.append(auto_id)
-        logger.info(f"Fired threshold automation {auto_id} for metric {metric_name}={current_val}")
+        logger.info(f"Fired threshold automation {auto_id} for metric {metric_name}={current_val} (source={metric_source})")
 
     return fired_ids

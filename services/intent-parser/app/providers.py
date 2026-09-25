@@ -206,9 +206,10 @@ class DeterministicRuleProvider(LLMProvider):
         # Gibberish check: empty, special chars only, or random consonant strings
         clean_words = [w for w in re.sub(r"[^a-zA-Z0-9\s]", "", text).split() if len(w) > 0]
         known_keywords = {
-            "clean", "recycle", "bin", "email", "summary", "friday", "disk", "usage",
+            "clean", "recycle", "bin", "trash", "email", "summary", "friday", "disk", "usage",
             "notify", "every", "when", "at", "if", "send", "webhook", "monday", "schedule",
-            "healthcheck", "check", "log", "alert", "run"
+            "healthcheck", "check", "log", "alert", "run", "search", "delete", "remove", "wipe",
+            "drive", "drives", "browser", "tab", "tabs", "open", "temp", "cache"
         }
         meaningful_count = sum(1 for w in clean_words if w in known_keywords)
 
@@ -252,8 +253,59 @@ class DeterministicRuleProvider(LLMProvider):
             )
             return schema.model_validate(res.model_dump())
 
-        # Case 1: Recycle bin threshold
-        if "recycle" in text or "bin" in text:
+        # Case 0A: Curated Clean ("clean my C drive" -> clean_temp_and_cache, NEVER delete_path)
+        if ("clean" in text or "free up" in text) and ("drive" in text or "c:" in text or "temp" in text or "cache" in text):
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="clean_temp_and_cache", params={"include_browser_cache": True}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        # Case 0B: Delete path (forbidden or specific)
+        if "delete" in text or "remove" in text or "wipe" in text:
+            path_match = re.search(r"(?:delete|remove|wipe)\s+(?:folder|directory|path\s+)?([A-Za-z]:[\\/][^\s]*|[A-Za-z]:|/[^\s]*)", text, re.IGNORECASE)
+            target_path = path_match.group(1) if path_match else "C:\\"
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="delete_path", params={"path": target_path}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        # Case 0C: List drives
+        if "list" in text and "drive" in text:
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="list_drives", params={}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        # Case 0D: Web search
+        if text.startswith("search") or "search for" in text:
+            query = re.sub(r"^search\s+(for\s+)?", "", text)
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="web_search", params={"query": query}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        # Case 1: Recycle bin / trash threshold
+        if "recycle" in text or "bin" in text or "trash" in text:
             pct_match = re.search(r"(\d+)\s*%", text)
             thresh = int(pct_match.group(1)) if pct_match else 80
             res = ParsedResult(

@@ -1,11 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel
-from .common import ActionResult, ActionNotAvailableError
+# Deprecated alias: empty_recycle_bin -> empty_trash
+from .empty_trash import EmptyTrashParams as EmptyRecycleBinParams
+from .empty_trash import empty_trash as empty_recycle_bin
 
-
-class EmptyRecycleBinParams(BaseModel):
-    drive: Optional[str] = None
-
-
-async def empty_recycle_bin(params: EmptyRecycleBinParams) -> ActionResult:
-    raise ActionNotAvailableError("host-boundary action, requires v2 host agent — not available in Docker-only MVP")
+__all__ = ["EmptyRecycleBinParams", "empty_recycle_bin"]

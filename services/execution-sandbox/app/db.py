@@ -90,3 +90,53 @@ def log_audit_event(event_type: str, payload: Dict[str, Any], automation_id: Opt
         conn.close()
     except Exception as e:
         logger.error(f"Error logging audit event: {e}")
+
+
+def get_online_host_agent() -> Optional[Dict[str, Any]]:
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, os_family, distro_id, status, last_seen_at
+            FROM host_agents
+            WHERE status = 'online'
+            ORDER BY last_seen_at DESC
+            LIMIT 1;
+            """
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            return {
+                "id": str(row[0]),
+                "user_id": str(row[1]) if row[1] else None,
+                "os_family": row[2],
+                "distro_id": row[3],
+                "status": row[4],
+                "last_seen_at": str(row[5]) if row[5] else None,
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Error getting online host agent: {e}")
+        return None
+
+
+def create_host_agent_job(host_agent_id: str, action_name: str, params: Dict[str, Any], automation_id: Optional[str] = None) -> str:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO host_agent_jobs (host_agent_id, automation_id, action_name, params, status)
+        VALUES (%s, %s, %s, %s, 'pending')
+        RETURNING id;
+        """,
+        (host_agent_id, automation_id, action_name, json.dumps(params))
+    )
+    job_id = str(cur.fetchone()[0])
+    conn.commit()
+    cur.close()
+    conn.close()
+    return job_id
+

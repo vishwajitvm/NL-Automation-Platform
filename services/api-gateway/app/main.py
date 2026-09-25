@@ -1,15 +1,27 @@
 from datetime import datetime, timezone, timedelta
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import httpx
-from fastapi import FastAPI, HTTPException, status, Query
+from fastapi import FastAPI, HTTPException, status, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from shared.logging_config import setup_logging_and_middleware
 from shared.schemas.plan import AutomationPlan
-from .db import list_automations, get_automation_by_id, archive_automation, get_audit_logs
+from shared.safety.denylist import is_forbidden, FORBIDDEN_REFUSAL_MESSAGE
+from .db import (
+    list_automations,
+    get_automation_by_id,
+    archive_automation,
+    get_audit_logs,
+    create_host_agent_token,
+    register_host_agent,
+    record_host_agent_metric,
+    get_next_host_agent_job,
+    complete_host_agent_job,
+    list_host_agents,
+)
 
 logger = logging.getLogger("api-gateway")
 
@@ -37,7 +49,91 @@ class CreateAutomationRequest(BaseModel):
 
 
 class ResumeAutomationRequest(BaseModel):
-    user_response: str = Field(..., description="Response to ambiguity question")
+    user_response: Union[str, Dict[str, Any]] = Field(..., description="Response to ambiguity question or confirmation payload")
+
+
+class RegisterAgentRequest(BaseModel):
+    token: str
+    os_family: str
+    distro_id: Optional[str] = None
+    distro_name: Optional[str] = None
+    distro_version: Optional[str] = None
+    package_manager: Optional[str] = None
+    init_system: Optional[str] = None
+    trash_path: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+
+
+class AgentMetricRequest(BaseModel):
+    metric: str
+    value: float
+
+
+class JobResultRequest(BaseModel):
+    status: str
+    result: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/v1/host-agents/tokens")
+def generate_agent_token():
+    token, agent_id = create_host_agent_token()
+    return {
+        "token": token,
+        "agent_id": agent_id,
+        "run_command": f"python -m host_agent run --token {token} --server http://localhost:8080"
+    }
+
+
+@app.post("/api/v1/host-agents/register")
+def register_agent(req: RegisterAgentRequest):
+    agent = register_host_agent(
+        token=req.token,
+        os_family=req.os_family,
+        distro_id=req.distro_id,
+        distro_name=req.distro_name,
+        distro_version=req.distro_version,
+        package_manager=req.package_manager,
+        init_system=req.init_system,
+        trash_path=req.trash_path,
+        capabilities=req.capabilities
+    )
+    if not agent:
+        raise HTTPException(status_code=401, detail="Invalid host agent registration token.")
+    return {"status": "online", "agent": agent}
+
+
+@app.post("/api/v1/host-agents/metrics")
+def post_agent_metric(req: AgentMetricRequest, x_agent_token: Optional[str] = Header(None, alias="X-Agent-Token")):
+    if not x_agent_token:
+        raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
+    recorded = record_host_agent_metric(x_agent_token, req.metric, req.value)
+    if not recorded:
+        raise HTTPException(status_code=401, detail="Invalid host agent token")
+    return {"status": "recorded", "metric": req.metric, "value": req.value}
+
+
+@app.get("/api/v1/host-agents/jobs/next")
+def poll_agent_job(x_agent_token: Optional[str] = Header(None, alias="X-Agent-Token")):
+    if not x_agent_token:
+        raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
+    job = get_next_host_agent_job(x_agent_token)
+    return {"job": job}
+
+
+@app.post("/api/v1/host-agents/jobs/{job_id}/result")
+def submit_agent_job_result(job_id: str, req: JobResultRequest, x_agent_token: Optional[str] = Header(None, alias="X-Agent-Token")):
+    if not x_agent_token:
+        raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
+    success = complete_host_agent_job(x_agent_token, job_id, req.status, req.result)
+    if not success:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
+    return {"status": "acknowledged", "job_id": job_id}
+
+
+@app.get("/api/v1/host-agents")
+def get_host_agents():
+    agents = list_host_agents()
+    return {"agents": agents, "host_agents": agents}
 
 
 @app.get("/health")
@@ -47,14 +143,12 @@ def health_check():
 
 @app.get("/api/v1/automations")
 def get_automations(status: Optional[str] = Query(None)):
-    """List automations filtered optionally by status"""
     items = list_automations(status=status)
     return {"automations": items}
 
 
 @app.get("/api/v1/automations/{automation_id}")
 def get_automation(automation_id: str):
-    """Retrieve details of a single automation"""
     auto = get_automation_by_id(automation_id)
     if not auto:
         raise HTTPException(status_code=404, detail="Automation not found")
@@ -63,12 +157,10 @@ def get_automation(automation_id: str):
 
 @app.delete("/api/v1/automations/{automation_id}")
 async def delete_automation(automation_id: str):
-    """Archive an automation and unregister trigger"""
     success = archive_automation(automation_id)
     if not success:
         raise HTTPException(status_code=404, detail="Automation not found")
 
-    # Unregister from trigger engine
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.delete(f"{TRIGGER_ENGINE_URL}/triggers/{automation_id}")
@@ -80,14 +172,12 @@ async def delete_automation(automation_id: str):
 
 @app.get("/api/v1/automations/{automation_id}/audit")
 def get_automation_audit(automation_id: str, limit: int = 50):
-    """Get audit logs for a specific automation"""
     logs = get_audit_logs(automation_id=automation_id, limit=limit)
     return {"audit_logs": logs}
 
 
 @app.get("/api/v1/audit")
 def get_all_audit(limit: int = 50):
-    """Get global audit logs"""
     logs = get_audit_logs(limit=limit)
     return {"audit_logs": logs}
 
@@ -98,8 +188,30 @@ async def create_automation(req: CreateAutomationRequest):
     if not raw_text:
         raise HTTPException(status_code=400, detail="I couldn't understand that.")
 
-    # 1. Intent Parser Call
     async with httpx.AsyncClient(timeout=15.0) as client:
+        # 0. Request Router Pre-Gate
+        try:
+            route_resp = await client.post(
+                f"{INTENT_PARSER_URL}/route",
+                json={"raw_text": raw_text}
+            )
+            if route_resp.status_code == 200:
+                route_data = route_resp.json()
+                if route_data.get("lane") == "disallowed_content":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "content_policy_blocked",
+                            "message": route_data.get("refusal", "Request violates content policy."),
+                            "reason": route_data.get("reason"),
+                        }
+                    )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Request router note: {e}")
+
+        # 1. Intent Parser Call
         try:
             parse_resp = await client.post(
                 f"{INTENT_PARSER_URL}/parse",
@@ -110,7 +222,6 @@ async def create_automation(req: CreateAutomationRequest):
             raise HTTPException(status_code=503, detail="Intent parser service unavailable")
 
         if parse_resp.status_code == 422:
-            # Compound automation rejected
             err_data = parse_resp.json()
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -122,12 +233,25 @@ async def create_automation(req: CreateAutomationRequest):
 
         plan_data = parse_resp.json()
 
-        # Ensure user timezone is incorporated
-        if plan_data.get("trigger") and "params" in plan_data["trigger"]:
-            if req.timezone and "timezone" not in plan_data["trigger"]["params"]:
+        # Hard denylist check before confirmation modals are even offered
+        action_obj = plan_data.get("action") or {}
+        if action_obj.get("name") == "delete_path":
+            target_path = action_obj.get("params", {}).get("path", "")
+            if is_forbidden(target_path):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "FORBIDDEN_DELETION",
+                        "message": FORBIDDEN_REFUSAL_MESSAGE,
+                        "path": target_path
+                    }
+                )
+
+        if req.timezone and plan_data.get("trigger") and "params" in plan_data["trigger"]:
+            if "timezone" not in plan_data["trigger"]["params"]:
                 plan_data["trigger"]["params"]["timezone"] = req.timezone
 
-        # 2. Guardrail Safety Check (evaluates plan including raw_text against destructive actions)
+        # 2. Guardrail Safety Check
         try:
             guard_resp = await client.post(
                 f"{GUARDRAIL_URL}/classify",
@@ -148,7 +272,7 @@ async def create_automation(req: CreateAutomationRequest):
                     "error": "GUARDRAIL_BLOCKED",
                     "reason": guard_data.get("reason", "Violated security guardrails policy."),
                     "categories": guard_data.get("categories", []),
-                    "suggested_alternative": "You can monitor disk usage with a webhook alert instead."
+                    "suggested_alternative": "You can clean temporary files and cache or monitor disk usage instead."
                 }
             )
 
@@ -164,8 +288,6 @@ async def create_automation(req: CreateAutomationRequest):
                 sp.get("action", {}).get("name") == plan_data.get("action", {}).get("name") and
                 sp.get("trigger", {}).get("params") == plan_data.get("trigger", {}).get("params")
             ):
-                logger.info(f"Duplicate active automation detected with id {item.get('id')}")
-                # We permit proceeding but warn or associate
                 break
 
         # 4. Decision Agent Resolution
@@ -183,17 +305,18 @@ async def create_automation(req: CreateAutomationRequest):
 
         decision_data = decision_resp.json()
 
-        # If status is draft (waiting for ambiguity answer)
         if decision_data.get("status") == "draft":
             return {
                 "id": decision_data["automation_id"],
                 "status": "draft",
+                "confirmation_required": decision_data.get("confirmation_required", False),
+                "risk_tier": decision_data.get("risk_tier"),
+                "preview": decision_data.get("preview"),
                 "clarification_prompt": decision_data.get("clarification_question"),
                 "plan": plan_data,
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
             }
 
-        # Otherwise active
         return {
             "id": decision_data["automation_id"],
             "status": "active",
@@ -202,9 +325,95 @@ async def create_automation(req: CreateAutomationRequest):
         }
 
 
+@app.post("/api/v1/commands")
+async def execute_immediate_command(req: CreateAutomationRequest):
+    """Executes a one-off immediate command (trigger.type = 'immediate')"""
+    raw_text = req.text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="I couldn't understand that.")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # Route
+        route_resp = await client.post(f"{INTENT_PARSER_URL}/route", json={"raw_text": raw_text})
+        if route_resp.status_code == 200:
+            route_data = route_resp.json()
+            if route_data.get("lane") == "disallowed_content":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "content_policy_blocked",
+                        "message": route_data.get("refusal", "Request violates content policy."),
+                        "reason": route_data.get("reason"),
+                    }
+                )
+
+        # Parse
+        parse_resp = await client.post(f"{INTENT_PARSER_URL}/parse", json={"raw_text": raw_text})
+        if parse_resp.status_code != 200:
+            raise HTTPException(status_code=parse_resp.status_code, detail="Failed to parse command request")
+
+        plan_data = parse_resp.json()
+        if not plan_data.get("parseable", True):
+            raise HTTPException(status_code=400, detail="I couldn't understand that.")
+
+        # Ensure immediate trigger
+        plan_data["trigger"] = {"type": "immediate", "params": {}}
+
+        # Hard denylist check before anything else
+        action_obj = plan_data.get("action") or {}
+        if action_obj.get("name") == "delete_path":
+            target_path = action_obj.get("params", {}).get("path", "")
+            if is_forbidden(target_path):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "FORBIDDEN_DELETION",
+                        "message": FORBIDDEN_REFUSAL_MESSAGE,
+                        "path": target_path
+                    }
+                )
+
+        # Guardrail check
+        guard_resp = await client.post(f"{GUARDRAIL_URL}/classify", json=plan_data)
+        if guard_resp.status_code == 200:
+            guard_data = guard_resp.json()
+            if guard_data.get("decision") == "blocked":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "GUARDRAIL_BLOCKED",
+                        "reason": guard_data.get("reason", "Violated security guardrails policy."),
+                        "categories": guard_data.get("categories", [])
+                    }
+                )
+
+        # Decision agent resolution
+        decision_resp = await client.post(f"{DECISION_AGENT_URL}/resolve", json={"plan": plan_data})
+        if decision_resp.status_code != 200:
+            raise HTTPException(status_code=decision_resp.status_code, detail="Failed to process command")
+
+        decision_data = decision_resp.json()
+        if decision_data.get("status") == "draft":
+            return {
+                "id": decision_data["automation_id"],
+                "status": "draft",
+                "confirmation_required": decision_data.get("confirmation_required", False),
+                "risk_tier": decision_data.get("risk_tier"),
+                "preview": decision_data.get("preview"),
+                "plan": plan_data
+            }
+
+        return {
+            "id": decision_data["automation_id"],
+            "status": "executed",
+            "plan": plan_data,
+            "executed_at": datetime.now(timezone.utc).isoformat()
+        }
+
+
 @app.post("/api/v1/automations/{automation_id}/resume")
 async def resume_automation(automation_id: str, req: ResumeAutomationRequest):
-    """Resume an ambiguous automation currently in draft status"""
+    """Resume an ambiguous automation or confirm destructive action currently in draft status"""
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.post(
@@ -220,7 +429,7 @@ async def resume_automation(automation_id: str, req: ResumeAutomationRequest):
         data = resp.json()
         return {
             "id": automation_id,
-            "status": "active",
+            "status": data.get("status", "active"),
             "plan": data.get("plan"),
             "updated_at": datetime.now(timezone.utc).isoformat()
         }

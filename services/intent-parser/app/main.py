@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from shared.logging_config import setup_logging_and_middleware
 from shared.schemas.plan import AutomationPlan
+from .router import router as request_router
 from .providers import (
     ProviderChain,
     GeminiProvider,
@@ -19,6 +20,7 @@ logger = logging.getLogger("intent-parser")
 
 app = FastAPI(title="Intent Parser Service", version="1.0.0")
 setup_logging_and_middleware(app, "intent-parser")
+app.include_router(request_router)
 
 # Default Provider Chain: Gemini -> Groq -> OpenRouter -> DeterministicRuleFallback
 chain = ProviderChain([

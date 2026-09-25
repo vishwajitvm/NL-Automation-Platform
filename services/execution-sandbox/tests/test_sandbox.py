@@ -45,7 +45,8 @@ async def test_invalid_parameters_pydantic_validation_error():
 
 
 @pytest.mark.asyncio
-async def test_empty_recycle_bin_host_boundary_error():
+async def test_empty_recycle_bin_host_boundary_error(monkeypatch):
+    monkeypatch.setattr("app.db.get_online_host_agent", lambda: None)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await ac.post("/execute", json={

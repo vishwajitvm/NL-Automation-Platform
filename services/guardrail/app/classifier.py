@@ -16,7 +16,17 @@ ALLOWED_ACTIONS = {
     "send_webhook",
     "write_log_notification",
     "run_http_healthcheck",
-    "empty_recycle_bin",
+    "empty_trash",
+    "empty_recycle_bin",  # Deprecated alias
+    "web_search",
+    "check_disk_usage",
+    "list_drives",
+    "clean_temp_and_cache",
+    "delete_path",
+    "browser_open_url",
+    "browser_list_open_tabs",
+    "browser_close_tab",
+    "browser_clear_managed_cache",
 }
 
 TAXONOMY_PROMPT = """You are a security classifier for an automated task execution system.
@@ -43,6 +53,12 @@ class ClassificationResult(BaseModel):
 
 
 def is_obvious_destructive(plan: AutomationPlan) -> Optional[str]:
+    if plan.action and plan.action.name == "delete_path":
+        target = plan.action.params.get("path", "")
+        from shared.safety.denylist import is_forbidden
+        if is_forbidden(target):
+            return "destructive_fs_op"
+
     combined = f"{plan.raw_text} {json.dumps(plan.action.params if plan.action else {})}".lower()
     destructive_patterns = [
         r"format\s+[a-z]:",

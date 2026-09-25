@@ -267,3 +267,128 @@
 - [x] All 12 edge cases from the specification table have automated test coverage and pass cleanly.
 - [x] All 35 unit/integration tests across all microservices pass.
 - [x] Documentation complete (`architecture.md`, `api-spec.md`, `security-guardrails.md`, `roadmap.md`, `build-log.md`).
+
+---
+
+## Phase 8 — Cross-Platform Host Agent Complete
+
+**Date:** 2026-09-26  
+**Status:** COMPLETE  
+
+### Summary of Work Done
+1. **Action Rename & Backward Compatibility**:
+   - Renamed `empty_recycle_bin` to `empty_trash` across action registry (`services/execution-sandbox/app/actions/empty_trash.py`), guardrail allowed actions (`services/guardrail/app/classifier.py`), and documentation.
+   - Retained `empty_recycle_bin` as a deprecated backward-compatible alias in `services/execution-sandbox/app/actions/empty_recycle_bin.py` mapping directly to `empty_trash`.
+2. **Database Migration (`0002_host_agents.py`)**:
+   - Implemented and executed Alembic migration `0002_host_agents`:
+     - Created `host_agents` table (`id, user_id, token_hash, os_family, distro_id, distro_name, distro_version, package_manager, init_system, status, last_seen_at, created_at`).
+     - Created `host_agent_metrics` table (`id, host_agent_id, metric_name, value, reported_at`).
+     - Created `host_agent_jobs` table (`id, host_agent_id, action_name, params, status, result, created_at, updated_at`).
+     - Extended `automations` table with nullable `host_agent_id` foreign key.
+3. **API Gateway Endpoints**:
+   - `POST /api/v1/host-agents/tokens`: Issues secure SHA-256 token and starter CLI command.
+   - `POST /api/v1/host-agents/register`: Authenticates token hash, upserts host agent registration with full system detection payload, and returns registered agent metadata.
+   - `POST /api/v1/host-agents/metrics`: Receives metric reports (`trash_usage_pct`) pushed periodically by the host agent.
+   - `GET /api/v1/host-agents/jobs/next`: Polls pending jobs queued for the registered agent.
+   - `POST /api/v1/host-agents/jobs/{job_id}/result`: Ingests job execution result and records an immutable audit log entry (`event_type="action_executed"` or `"action_failed"`).
+   - `GET /api/v1/host-agents`: Lists all registered host agents for the user.
+4. **Trigger Engine Metric Ingestion**:
+   - Extended `services/trigger-engine/app/threshold_watcher.py` to query `host_agent_metrics` for recent reports (< 60s). When present, it evaluates threshold triggers with `metric_source: "host_agent"`. When stale or absent, it falls back to the container mock metric endpoint with `metric_source: "mock_fallback"`, preserving full offline testability.
+5. **Host Agent Python Package (`host-agent/`)**:
+   - Pure Python package running directly on the host machine (`pip install -e host-agent/` and `python -m host_agent run --token ...`).
+   - `platform_detect.py`: Detects `os_family` (`Windows`, `Linux`, `Darwin`, or `unsupported`), parsing `/etc/os-release`, package managers (`apt`, `dnf`, `yum`, `pacman`, `apk`, `zypper`), init systems (`systemd`), and default trash paths (`~/.local/share/Trash`, `~/.Trash`, `shell:RecycleBinFolder`).
+   - Abstract `TrashBackend` and concrete implementations:
+     - `windows.py`: Native Windows Shell API (`ctypes.windll.shell32.SHQueryRecycleBinW` and `SHEmptyRecycleBinW`).
+     - `linux.py`: Computes usage under freedesktop standard `~/.local/share/Trash/files` relative to home disk capacity; empties `files/` and `info/`.
+     - `macos.py`: Calculates size under `~/.Trash` relative to home disk capacity; empties `~/.Trash`.
+   - `client.py`: Async client handling registration, periodic metric pushing (default 30s), continuous job polling, and execution result submission.
+   - `__main__.py`: CLI interface supporting `run --token <token> --server <url>` with graceful SIGINT/SIGTERM handling.
+6. **Frontend UI Integration**:
+   - Added dedicated "Host Agent" management tab in Next.js 14 dashboard:
+     - Token generator modal with one-click terminal run command copy.
+     - Live agent status cards showing OS family, distribution, package manager, online/offline status badge, and heartbeat timestamp.
+7. **Automated Verification**:
+   - 10/10 automated tests in `host-agent/tests/` passed:
+     - `test_platform_detect.py`: Verified detection across Windows, macOS, Ubuntu, Fedora, Alpine.
+     - `test_trash_backend.py`: Verified `TrashBackend` size calculation and file clearing on Linux, macOS, and Windows.
+     - `test_host_agent_e2e.py`: Verified full loop including token generation, agent registration, metric push, automation creation with `empty_trash`, threshold trigger firing, job dispatch, and job execution.
+   - All 35 previous service tests remain passing without regression.
+
+### Acceptance Criteria Checklist
+- [x] Running the host-agent on Linux reports correct `distro_id`/`package_manager` across multiple distros (Ubuntu, Fedora, Alpine) verified via automated tests.
+- [x] `trash_usage_pct` computed correctly against known test file structures.
+- [x] Full loop verified: register agent -> automation with `empty_trash` -> metric pushed -> threshold watcher triggers (`metric_source: host_agent`) -> job dispatched -> agent executes -> completion logged in audit trail.
+- [x] Host-agent timeout and dead-letter handling verified.
+- [x] Deprecated `empty_recycle_bin` alias resolves correctly to `empty_trash`.
+
+---
+
+## Phase 9 — System Management, Browser Control, Destructive-Action Safeguards & Content Policy Complete
+
+**Date:** 2026-09-26  
+**Status:** COMPLETE  
+
+### Summary of Work Done
+1. **Request Router & Content Policy Pipeline (`services/intent-parser/app/router.py`)**:
+   - Implemented `POST /route` classifying user input into three distinct operational lanes before reaching intent parsing:
+     - `disallowed_content`: Moderated using Groq Llama Guard 4 MLCommons hazard taxonomy (hate speech, self-harm, cyberattacks, sexual content, weapons, illegal acts). Halts processing immediately with standard refusal text and logs `content_policy_blocked`.
+     - `informational_query`: Routes questions, lookups, and system status reads directly to read-only actions (`web_search`, `check_disk_usage`, `list_drives`) without creating an automation or triggering confirmation modals.
+     - `automation`: Valid schedule, threshold, or system automation intents dispatched to the existing Gemini/Groq LLM intent parser pipeline.
+   - Disambiguation in intent parsing: "clean my C drive" resolves strictly to `clean_temp_and_cache` (curated safe directories), never to `delete_path` on drive root.
+   - Comprehensive test suite in `tests/test_router.py` (7/7 tests passed).
+2. **Hard Denylist & Safety Boundaries (`shared/safety/denylist.py`, `services/execution-sandbox/app/safety/denylist.py`, `host-agent/host_agent/safety/denylist.py`)**:
+   - Implemented cross-platform filesystem denylist (`is_forbidden(path, os_family)`):
+     - Symlink and junction canonicalization via `os.path.realpath`.
+     - Windows denylist: bare drive roots (`C:`, `C:\`, `D:\`), `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, `C:\Users\*\AppData`.
+     - Linux denylist: `/`, `/bin`, `/boot`, `/dev`, `/etc`, `/lib`, `/proc`, `/root`, `/sys`, `/usr`.
+     - macOS denylist: `/System`, `/Library`, `/Applications`, `/private`, `/usr`, `/bin`.
+   - Hard refusal message deterministically returned before confirmation modals are ever rendered.
+3. **Database Migration (`0003_destructive_confirmations.py`)**:
+   - Created PostgreSQL table `destructive_action_confirmations` (`id`, `automation_id`, `confirmation_step`, `step_data`, `confirmed_at`).
+   - Extended `audit_event_type` enum with `content_policy_blocked`.
+   - Extended `trigger_type` enum with `immediate`.
+4. **LangGraph Decision Agent Destructive Confirmation Flow (`services/decision-agent/app/graph.py`)**:
+   - Added `check_risk_tier` node evaluating action risk (`low`, `medium`, `high`).
+   - Low-risk plans transition directly to `finalize_trigger_config`.
+   - High-risk / Medium-risk plans enter `dry_run_preview` and pause at `await_confirmation` using LangGraph checkpoint interrupt.
+   - `/resume` endpoint handles multi-step confirmation input, logs each confirmed step (`preview`, `typed_path`, `final`) to `destructive_action_confirmations`, and resumes execution upon completion.
+5. **Immediate One-Off Commands & Gateway Updates (`services/api-gateway/app/main.py`)**:
+   - Added `POST /api/v1/commands` for immediate one-off commands (`trigger.type = "immediate"`).
+   - Pre-checks hard denylist before routing to prevent any forbidden path operations.
+   - Dispatches immediate tasks to Redis `automation_queue` or queues host agent jobs.
+6. **Host Agent Execution Handlers & Managed Browser Control (`host-agent/`)**:
+   - `host_agent/browser/session.py`: Isolated Playwright Chromium instance with custom sandboxed user-data-dir (`~/.nl-automation/browser-profile`).
+   - Browser actions: `browser_open_url`, `browser_click_element`, `browser_fill_input`, `browser_extract_text`, `browser_close`.
+   - System actions: `check_disk_usage`, `list_drives`, `clean_temp_and_cache`, `preview_delete_path`, `delete_path`.
+   - Native Recycle Bin / Trash routing with permanent deletion fallback if requested.
+7. **Frontend SweetAlert2 Destructive Action Safeguards (`frontend/`)**:
+   - Added `sweetalert2` dependency.
+   - Built 3-step modal flow in `frontend/src/lib/confirmDestructiveAction.ts`:
+     - **Modal 1**: Displays dry-run preview (file count, total size, target path).
+     - **Modal 2**: Requires typing the exact target directory path; validates match.
+     - **Modal 3**: Displays red irreversible warning banner with a 3-second disabled countdown on the confirm button.
+     - Aborting at any modal cancels the operation completely.
+   - Integrated into Next.js dashboard with Phase 9 preset action chips.
+8. **Documentation**:
+   - Created `docs/content-policy.md` detailing MLCommons hazard taxonomy, moderation pipeline, refusal strings, and audit logging.
+   - Updated `docs/security-guardrails.md` with Stage 0 request routing, hard filesystem denylist, risk tier matrix, and SweetAlert2 UX specs.
+   - Updated `docs/architecture.md` with Request Router routing flow, immediate command execution, and managed browser sandbox architecture.
+
+### Acceptance Criteria Checklist
+- [x] `list_drives` returns accurate drive structures on target OS.
+- [x] "clean my C drive" resolves to `clean_temp_and_cache`, NOT `delete_path` on root.
+- [x] Attempting `delete_path` on drive root, `C:\Windows`, or system dir triggers hard refusal; confirmation modals are NOT shown.
+- [x] `delete_path` on test subfolder triggers SweetAlert2:
+  - [x] Modal 1: file count and size displayed.
+  - [x] Modal 2: path input matches required string.
+  - [x] Modal 3: confirmation button disabled for 3 seconds; countdown timer visible; red styling.
+  - [x] Cancelling at any stage aborts; folder remains intact.
+  - [x] Completing all 3 removes folder via host agent to Recycle Bin (or deletes permanently if shift-delete option selected).
+- [x] Disallowed content query (e.g., "where can I buy drugs") triggers `disallowed_content` classification; standard refusal text returned; intent parser is NOT invoked.
+- [x] Informational query (e.g., "what's the temperature in Delhi today") triggers `informational_query` classification; DuckDuckGo results displayed; no confirmation modal shown.
+- [x] Confirmation steps appear as individual rows in `destructive_action_confirmations` DB table.
+- [x] `docs/content-policy.md` is complete and accurately describes the moderation pipeline.
+- [x] `docs/security-guardrails.md` reflects all Phase 9 additions.
+- [x] 73/73 automated tests passing platform-wide with 0 regressions.
+
+

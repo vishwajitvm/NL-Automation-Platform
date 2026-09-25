@@ -135,3 +135,28 @@ def sweep_expired_drafts(cutoff_delta: timedelta = timedelta(hours=24), custom_n
     cur.close()
     conn.close()
     return archived_ids
+
+
+def record_destructive_action_confirmation(
+    step: str,
+    automation_id: Optional[str] = None,
+    command_id: Optional[str] = None,
+    target_path: Optional[str] = None,
+    user_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None
+) -> str:
+    conn = get_connection()
+    cur = conn.cursor()
+    cid = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO destructive_action_confirmations (id, automation_id, command_id, step, target_path, user_id, details)
+        VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """,
+        (cid, automation_id, command_id, step, target_path, user_id, json.dumps(details or {}))
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return cid
+

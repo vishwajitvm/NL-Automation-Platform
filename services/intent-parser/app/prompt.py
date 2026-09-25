@@ -6,7 +6,7 @@ You MUST output strictly valid JSON matching this schema:
   "detected_count": integer,
   "parseable": boolean,
   "trigger": {
-    "type": "time" | "threshold" | "event",
+    "type": "time" | "threshold" | "event" | "immediate",
     "params": object
   } or null,
   "action": {
@@ -22,8 +22,10 @@ Instructions:
 1. Count distinct automations in the input sentence. If user describes two or more distinct workflows (e.g. 'clean bin at 80% and email me weekly'), set detected_count=2 (or more).
 2. If the sentence is empty, meaningless characters, or complete gibberish, set parseable=false, detected_count=0, trigger=null, action=null, ambiguities=[].
 3. If parameters are underspecified (e.g. 'clean it when it is full'), do NOT guess values! Add an entry to ambiguities with field_path (e.g. 'trigger.params.threshold') and question.
-4. Allowed action names must be from: 'empty_recycle_bin', 'send_email', 'send_webhook', 'write_log_notification', 'run_http_healthcheck'.
-5. Always output strictly valid raw JSON without markdown formatting or codeblocks.
+4. Allowed action names: 'empty_trash', 'empty_recycle_bin', 'send_email', 'send_webhook', 'write_log_notification', 'run_http_healthcheck', 'clean_temp_and_cache', 'check_disk_usage', 'list_drives', 'web_search', 'delete_path', 'browser_open_url', 'browser_list_open_tabs', 'browser_close_tab', 'browser_clear_managed_cache'.
+5. CRITICAL: Any request to 'clean my C drive', 'clean C:', 'clean drive', or 'free up space on disk' MUST map to action 'clean_temp_and_cache', NEVER 'delete_path'.
+6. If the request is a one-off command without recurrence or threshold, set trigger.type='immediate'.
+7. Always output strictly valid raw JSON without markdown formatting or codeblocks.
 
 Few-Shot Examples:
 User: "clean my recycle bin when it reaches 80%"

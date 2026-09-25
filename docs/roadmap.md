@@ -10,3 +10,6 @@
 | **Phase 5** | Decision Agent (LangGraph, LangSmith tracing) | **Complete** | Ambiguity resolution round-trip, full trace in LangSmith, 3/3 tests passed |
 | **Phase 6** | Trigger Engine & Queue (APScheduler, Redis watcher, debounce) | **Complete** | Threshold and time triggers fire and log to audit_log, dead-letter queue verified |
 | **Phase 7** | Frontend & Documentation Polish (Next.js chat composer) | **Complete** | End-to-end happy path operational, all 35 tests passing, live Next.js UI verified |
+| **Phase 8** | Cross-Platform Host Agent (OS detection, multi-OS trash, push metrics, job polling) | **Complete** | Host agent registered, trash emptied on Windows/Linux/macOS, 10/10 tests passed |
+| **Phase 9** | System Management, Browser Control, Destructive Safeguards & Content Policy | **Complete** | Routing, denylist, risk tiers, 3-step destructive confirmation, browser control |
+

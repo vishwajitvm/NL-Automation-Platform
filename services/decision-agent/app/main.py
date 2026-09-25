@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from langgraph.types import Command
@@ -24,7 +24,7 @@ class ResolveRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     automation_id: str
-    user_response: str
+    user_response: Union[str, Dict[str, Any]]
 
 
 @app.get("/health")
@@ -44,24 +44,35 @@ async def resolve_plan(req: ResolveRequest):
         "clarification_question": None,
         "user_response": None,
         "final_trigger": None,
+        "risk_tier": "low",
+        "preview_data": None,
+        "confirmation_payload": None,
         "status": "initial",
         "is_paused": False
     }
 
-    # Run the graph
-    events = []
-    # In LangGraph with interrupt, invoke will run until interrupt
+    # Run graph until interrupt or completion
     state_output = await decision_graph.ainvoke(initial_state, config=config)
     
     # Check if graph paused at interrupt
     snapshot = decision_graph.get_state(config)
     if snapshot.next:
-        # Paused on interrupt (ask_user)
-        # Find interrupt value
         question = "Please clarify details"
         for task in snapshot.tasks:
             if hasattr(task, "interrupts") and task.interrupts:
-                question = task.interrupts[0].value.get("question", question)
+                val = task.interrupts[0].value
+                if isinstance(val, dict):
+                    if val.get("type") == "destructive_confirmation_required":
+                        return {
+                            "automation_id": auto_id,
+                            "status": "draft",
+                            "confirmation_required": True,
+                            "risk_tier": val.get("risk_tier"),
+                            "preview": val.get("preview"),
+                            "action": val.get("action"),
+                            "paused_node": "await_confirmation"
+                        }
+                    question = val.get("question", question)
 
         return {
             "automation_id": auto_id,
@@ -92,6 +103,23 @@ async def resume_plan(req: ResumeRequest):
         config=config
     )
 
+    # Check if another interrupt followed (e.g. ambiguity resolved then destructive confirmation needed)
+    post_snapshot = decision_graph.get_state(config)
+    if post_snapshot.next:
+        for task in post_snapshot.tasks:
+            if hasattr(task, "interrupts") and task.interrupts:
+                val = task.interrupts[0].value
+                if isinstance(val, dict) and val.get("type") == "destructive_confirmation_required":
+                    return {
+                        "automation_id": req.automation_id,
+                        "status": "draft",
+                        "confirmation_required": True,
+                        "risk_tier": val.get("risk_tier"),
+                        "preview": val.get("preview"),
+                        "action": val.get("action"),
+                        "paused_node": "await_confirmation"
+                    }
+
     return {
         "automation_id": req.automation_id,
         "status": state_output.get("status", "active"),
@@ -101,7 +129,6 @@ async def resume_plan(req: ResumeRequest):
 
 
 @app.post("/sweeper/run")
-def run_draft_sweeper():
-    """Manual or cron trigger to sweep unanswered drafts older than 24h"""
+def trigger_sweeper():
     archived = sweep_expired_drafts()
-    return {"archived_count": len(archived), "archived_ids": archived}
+    return {"status": "ok", "archived_count": len(archived), "archived_ids": archived}

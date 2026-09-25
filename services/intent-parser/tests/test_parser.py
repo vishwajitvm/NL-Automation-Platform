@@ -178,3 +178,19 @@ async def test_simulated_gemini_429_failover_to_groq(monkeypatch):
         e["event_type"] == "provider_failover" and e["payload"]["provider"] == "FailingGemini"
         for e in audit_events
     )
+
+
+@pytest.mark.asyncio
+async def test_clean_c_drive_resolves_to_curated_action():
+    """
+    Acceptance criteria: 'clean my C drive' -> clean_temp_and_cache, never delete_path on C:\\
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/parse", json={"raw_text": "clean my C drive"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parseable"] is True
+        assert data["action"]["name"] == "clean_temp_and_cache"
+        assert data["action"]["name"] != "delete_path"
+

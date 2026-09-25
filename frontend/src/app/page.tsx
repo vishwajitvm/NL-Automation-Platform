@@ -18,8 +18,10 @@ import {
   Terminal,
   Zap,
   Server,
-  Layers
+  Layers,
+  Laptop
 } from "lucide-react";
+import { confirmDestructiveAction } from "@/lib/confirmDestructiveAction";
 
 interface TriggerConfig {
   type: string;
@@ -58,11 +60,41 @@ interface AuditLogItem {
   timestamp: string;
 }
 
+interface HostAgentItem {
+  id: string;
+  os_family: string;
+  distro_id?: string;
+  distro_name?: string;
+  distro_version?: string;
+  package_manager?: string;
+  init_system?: string;
+  trash_path?: string;
+  status: "online" | "offline";
+  capabilities: string[];
+  last_seen_at?: string;
+  created_at: string;
+}
+
 const PRESET_PROMPTS = [
   {
-    label: "Recycle Bin Threshold (Happy Path)",
-    prompt: "Clean my recycle bin when it reaches 80%",
-    desc: "Threshold trigger with host-boundary action"
+    label: "Safe Drive Cleanup (Phase 9 Curated)",
+    prompt: "Clean my C drive",
+    desc: "Resolves to clean_temp_and_cache, never raw drive delete"
+  },
+  {
+    label: "Destructive Path Deletion (Phase 9 3-Step Confirmation)",
+    prompt: "Delete folder C:\\temp\\old_build",
+    desc: "SweetAlert2 preview, typed confirmation & 3s countdown"
+  },
+  {
+    label: "Drive Root Deletion (Hard Denylist Refusal)",
+    prompt: "Delete C:\\ drive",
+    desc: "Immediate refusal, confirmation modals never offered"
+  },
+  {
+    label: "Illegal Content (Content Policy Refusal)",
+    prompt: "Where can I buy drugs online?",
+    desc: "Immediate refusal via default Llama Guard hazard taxonomy"
   },
   {
     label: "Weekly Email (Time-Based)",
@@ -70,14 +102,14 @@ const PRESET_PROMPTS = [
     desc: "APScheduler cron converted to UTC"
   },
   {
+    label: "Recycle Bin Threshold (Happy Path)",
+    prompt: "Clean my recycle bin when it reaches 80%",
+    desc: "Threshold trigger with host-boundary action"
+  },
+  {
     label: "Ambiguous Request (Requires Clarification)",
     prompt: "Clean the recycle bin when it is full",
     desc: "Pauses at ask_user; awaits threshold percentage"
-  },
-  {
-    label: "Destructive Request (Guardrail Blocked)",
-    prompt: "Format C: drive every night",
-    desc: "Stage 0/2 security classifier fail-closed"
   },
   {
     label: "Compound Automation (422 Rejection)",
@@ -88,7 +120,7 @@ const PRESET_PROMPTS = [
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState("http://localhost:8080");
-  const [activeTab, setActiveTab] = useState<"compose" | "automations" | "audit">("compose");
+  const [activeTab, setActiveTab] = useState<"compose" | "automations" | "audit" | "host-agent">("compose");
 
   // Health
   const [isGatewayHealthy, setIsGatewayHealthy] = useState<boolean | null>(null);
@@ -113,6 +145,12 @@ export default function Home() {
   const [selectedAuditAutoId, setSelectedAuditAutoId] = useState<string | null>(null);
   const [isLoadingAudit, setIsLoadingAudit] = useState(false);
   const [autoRefreshAudit, setAutoRefreshAudit] = useState(false);
+
+  // Host Agent State
+  const [hostAgents, setHostAgents] = useState<HostAgentItem[]>([]);
+  const [generatedTokenInfo, setGeneratedTokenInfo] = useState<{ token: string; command: string } | null>(null);
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
 
   // Client Mount & Timezone for Hydration Safety
   const [mounted, setMounted] = useState(false);
@@ -178,6 +216,39 @@ export default function Home() {
     }
   }, [apiUrl, selectedAuditAutoId]);
 
+  // Load Host Agents
+  const fetchHostAgents = useCallback(async () => {
+    setIsLoadingAgents(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/host-agents`);
+      if (res.ok) {
+        const data = await res.json();
+        setHostAgents(data.host_agents || []);
+      }
+    } catch (e) {
+      console.error("Failed to fetch host agents", e);
+    } finally {
+      setIsLoadingAgents(false);
+    }
+  }, [apiUrl]);
+
+  // Generate Token
+  const generateHostAgentToken = async () => {
+    setIsGeneratingToken(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/host-agents/tokens`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedTokenInfo(data);
+        fetchHostAgents();
+      }
+    } catch (e) {
+      console.error("Failed to generate token", e);
+    } finally {
+      setIsGeneratingToken(false);
+    }
+  };
+
   useEffect(() => {
     checkHealth();
   }, [checkHealth]);
@@ -187,8 +258,10 @@ export default function Home() {
       fetchAutomations();
     } else if (activeTab === "audit") {
       fetchAuditLogs();
+    } else if (activeTab === "host-agent") {
+      fetchHostAgents();
     }
-  }, [activeTab, fetchAutomations, fetchAuditLogs]);
+  }, [activeTab, fetchAutomations, fetchAuditLogs, fetchHostAgents]);
 
   useEffect(() => {
     let timer: any;
@@ -196,9 +269,13 @@ export default function Home() {
       timer = setInterval(() => {
         fetchAuditLogs();
       }, 3000);
+    } else if (activeTab === "host-agent") {
+      timer = setInterval(() => {
+        fetchHostAgents();
+      }, 5000);
     }
     return () => clearInterval(timer);
-  }, [autoRefreshAudit, activeTab, fetchAuditLogs]);
+  }, [autoRefreshAudit, activeTab, fetchAuditLogs, fetchHostAgents]);
 
   // Handle Create Automation
   const handleCreateAutomation = async (textToSubmit?: string) => {
@@ -221,6 +298,37 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) {
         setComposerError(data.detail || data);
+      } else if (data.confirmation_required) {
+        // Multi-stage destructive action confirmation
+        const isWin = typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("win");
+        const confRes = await confirmDestructiveAction(
+          data.preview || {},
+          data.risk_tier || "medium",
+          isWin
+        );
+
+        if (confRes.confirmed) {
+          const resumeRes = await fetch(`${apiUrl}/api/v1/automations/${data.id}/resume`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_response: {
+                confirmed: true,
+                steps: confRes.steps,
+                path: confRes.path
+              }
+            })
+          });
+          const resumeData = await resumeRes.json();
+          setComposerResult(resumeData);
+          fetchAutomations();
+        } else {
+          setComposerResult({
+            ...data,
+            status: "cancelled",
+            cancellation_message: "Destructive action confirmation was cancelled. Nothing was executed or deleted."
+          });
+        }
       } else {
         setComposerResult(data);
       }
@@ -348,6 +456,17 @@ export default function Home() {
               >
                 <Activity className="w-3.5 h-3.5" />
                 Audit Trail
+              </button>
+              <button
+                onClick={() => setActiveTab("host-agent")}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                  activeTab === "host-agent"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Laptop className="w-3.5 h-3.5" />
+                Host Agent
               </button>
             </div>
           </div>
@@ -479,6 +598,10 @@ export default function Home() {
                       <h4 className="text-sm font-semibold text-rose-200">
                         {composerError.error === "GUARDRAIL_BLOCKED"
                           ? "Blocked by Security Guardrail Policy"
+                          : composerError.error === "FORBIDDEN_DELETION"
+                          ? "Hard Denylist Refusal (Cannot Wipe Drive Root / Core System Folder)"
+                          : composerError.error === "content_policy_blocked"
+                          ? "Blocked by Content Policy (Hazard Boundary — No Override)"
                           : composerError.error === "compound_automation_rejected"
                           ? "Single-Intent Contract Enforced (422)"
                           : "Automation Pipeline Error"}
@@ -853,6 +976,143 @@ export default function Home() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ================= HOST AGENT TAB ================= */}
+        {activeTab === "host-agent" && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Laptop className="w-5 h-5 text-indigo-400" />
+                  Cross-Platform Host Agent
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Runs natively on Windows, Linux, or macOS to monitor local storage and execute host-boundary automations without granting root to Docker.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={generateHostAgentToken}
+                  disabled={isGeneratingToken}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow flex items-center gap-2 transition-all"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isGeneratingToken ? "animate-spin" : ""}`} />
+                  Generate Agent Token
+                </button>
+                <button
+                  onClick={fetchHostAgents}
+                  disabled={isLoadingAgents}
+                  className="p-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-slate-300 hover:text-white transition-colors"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingAgents ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Token Generation Banner */}
+            {generatedTokenInfo && (
+              <div className="bg-indigo-950/40 border border-indigo-700/60 rounded-xl p-5 space-y-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">
+                      New Host Agent Registration Token
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-1">
+                      Run this command in a terminal on your host machine to start the agent:
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-mono bg-indigo-900/60 px-2 py-0.5 rounded text-indigo-300 border border-indigo-700">
+                    One-Time Token
+                  </span>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-lg border border-indigo-900/80 font-mono text-xs text-emerald-400 select-all overflow-x-auto">
+                  {generatedTokenInfo.command}
+                </div>
+              </div>
+            )}
+
+            {/* Connected Host Agents */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Registered Host Agents ({hostAgents.length})
+              </h3>
+
+              {isLoadingAgents && hostAgents.length === 0 ? (
+                <div className="p-12 text-center text-slate-500 flex flex-col items-center justify-center space-y-2">
+                  <RefreshCw className="w-6 h-6 animate-spin text-indigo-400" />
+                  <span className="text-xs">Fetching registered agents...</span>
+                </div>
+              ) : hostAgents.length === 0 ? (
+                <div className="border border-dashed border-slate-800 rounded-xl p-12 text-center bg-slate-900/30">
+                  <Laptop className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <div className="text-sm font-medium text-slate-400">No host agents connected yet</div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Click "Generate Agent Token" above and run the command on your host machine to connect.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {hostAgents.map((agent) => (
+                    <div
+                      key={agent.id}
+                      className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between hover:border-slate-700 transition-all shadow-sm"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${
+                              agent.status === "online"
+                                ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/80 flex items-center gap-1.5"
+                                : "bg-slate-800 text-slate-400 border-slate-700"
+                            }`}
+                          >
+                            {agent.status === "online" && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            )}
+                            {agent.status}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500" suppressHydrationWarning>
+                            {agent.last_seen_at && mounted ? `Seen ${new Date(agent.last_seen_at).toLocaleTimeString()}` : "Offline"}
+                          </span>
+                        </div>
+
+                        <div>
+                          <div className="text-sm font-bold text-white flex items-center gap-2">
+                            {agent.distro_name || agent.os_family}
+                          </div>
+                          <div className="text-xs text-slate-400 font-mono mt-0.5">
+                            ID: {agent.id.slice(0, 8)}...
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 space-y-1.5 text-[11px] font-mono">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">OS Family:</span>
+                            <span className="text-indigo-300">{agent.os_family}</span>
+                          </div>
+                          {agent.package_manager && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">Package Mgr:</span>
+                              <span className="text-slate-300">{agent.package_manager}</span>
+                            </div>
+                          )}
+                          {agent.trash_path && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">Trash Path:</span>
+                              <span className="text-slate-400 truncate max-w-[150px]">{agent.trash_path}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>

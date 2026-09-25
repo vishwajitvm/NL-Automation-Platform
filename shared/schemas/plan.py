@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -7,6 +7,7 @@ class TriggerType(str, Enum):
     time = "time"
     threshold = "threshold"
     event = "event"
+    immediate = "immediate"
 
 
 class Trigger(BaseModel):
@@ -17,6 +18,7 @@ class Trigger(BaseModel):
 class Action(BaseModel):
     name: str  # must match a registered action in execution-sandbox
     params: dict[str, Any]
+    risk_tier: Literal["low", "medium", "high"] = "low"
 
 
 class Ambiguity(BaseModel):

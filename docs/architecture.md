@@ -6,20 +6,27 @@ The **NL-Automation Platform** compiles natural language user requests into safe
 
 ## Architectural Layers
 
-1. **Client Layer (Next.js)**: Modern chat-style interface for natural language prompt submission, ambiguity resolution dialogues, and automation execution monitoring.
-2. **Gateway Layer (FastAPI)**: Central API and auth gateway validating requests and routing to cognitive and runtime services.
-3. **Reasoning Layer**:
+1. **Client Layer (Next.js)**: Modern chat-style interface for natural language prompt submission, multi-step SweetAlert2 confirmation dialogues for destructive actions, and real-time execution monitoring.
+2. **Gateway Layer (FastAPI)**: Central API and auth gateway validating requests, enforcing hard path denylists, and managing host agent tokens/jobs.
+3. **Reasoning & Routing Layer**:
+   - **Request Router** (`POST /route`): Fast-path classifier screening incoming raw text against default Llama Guard hazard taxonomies before intent parsing, sorting requests into `disallowed_content`, `informational_query`, or `automation`.
    - **Intent Parser** (Gemini 2.5 Flash / Groq / OpenRouter fallback): Deconstructs unstructured user input into a strongly typed `AutomationPlan`.
    - **Guardrail Classifier** (Groq Llama Guard 4 12B + Llama Prompt Guard 2 86M): Classifies intent against security, destructive actions, and prompt injections.
-   - **Decision Agent** (LangGraph + Mistral): Coordinates ambiguity resolution and schedule mapping, traced end-to-end with LangSmith.
+   - **Decision Agent** (LangGraph + Mistral): Coordinates ambiguity resolution, risk check branching, and 3-step destructive confirmation checkpoints, traced end-to-end with LangSmith.
 4. **Automation Runtime**:
-   - **Trigger Engine**: Evaluates schedules (APScheduler) and system/data states (polling watchers).
+   - **Trigger Engine**: Evaluates schedules (APScheduler) and system/data states (polling watchers and host metrics).
    - **Queue (Redis)**: Buffers tasks with idempotency guarantees and dead-letter queues.
    - **Execution Sandbox**: Executes jobs strictly via a closed Model Context Protocol (MCP) action registry.
-5. **Data Layer (PostgreSQL)**: Persistent storage for users, automation definitions, and immutable audit logs.
+   - **Host Agent** (Standalone Python daemon): Runs on the user's OS to perform host-boundary actions (`empty_trash`, `check_disk_usage`, `list_drives`, `clean_temp_and_cache`, `delete_path`, and managed browser tasks).
+5. **Data Layer (PostgreSQL)**: Persistent storage for users, automations, host agents, metrics, destructive action confirmation records, and immutable audit logs.
 6. **Observability**:
    - **TraceNest**: Microservice request/response logging with automated secret redaction.
    - **LangSmith**: Agent reasoning and graph state transition tracing.
+
+### Architectural Tradeoff Note: Managed Browser Isolation vs. Live Browser Access
+Reaching into a user's live daily browser (with active sessions, banking cookies, saved credentials, and personal history) creates severe security, privacy, and trust liabilities. A compromised or over-eager automation could inadvertently perform irreversible actions within live authenticated sessions.
+
+**Design Decision**: The host agent strictly operates a **separate, isolated managed browser session** (Playwright + Chromium running inside a dedicated temporary sandboxed profile). It possesses zero access to personal Chrome/Firefox profiles, saved logins, or personal cookies. This bounded scope provides robust web automation capabilities while preserving the user's personal security boundary.
 
 ---
 

@@ -1,0 +1,113 @@
+flowchart TD
+    START([User types a sentence]) --> ROUTER{"Request Router:\nLlama Guard DEFAULT taxonomy\non raw text"}
+
+    %% ===== LANE 1: DISALLOWED CONTENT =====
+    ROUTER -->|"illegal/harmful content\ne.g. buying real drugs"| REFUSE["Immediate refusal\nNO automation attempted\naudit: content_policy_blocked"]
+    REFUSE --> END1([End])
+
+    %% ===== LANE 2: INFORMATIONAL QUERY =====
+    ROUTER -->|"one-off factual ask\ne.g. 'temp in Delhi today'"| WEBSEARCH["web_search action\nread-only, rate-limited"]
+    WEBSEARCH --> SHOWRESULT["Return result to user\naudit logged"]
+    SHOWRESULT --> END2([End])
+
+    %% ===== LANE 3: AUTOMATION =====
+    ROUTER -->|"'do X when Y' style request"| PARSE["Intent Parser\nGemini 2.5 Flash to Groq to OpenRouter\n(auto failover on rate-limit)"]
+
+    PARSE --> PARSECHK{"Parseable?"}
+    PARSECHK -->|"gibberish/empty"| UNPARSE["parseable:false\n'could not understand'"]
+    UNPARSE --> END3([End])
+
+    PARSECHK -->|"2+ automations\nin one sentence"| COMPOUND["HTTP 422\ncompound_automation_rejected"]
+    COMPOUND --> END4([End])
+
+    PARSECHK -->|"single valid plan"| REGCHK{"action.name in\nfixed registry?"}
+    REGCHK -->|"No"| REJUNK["Rejected: unregistered action\nno fallback execution"]
+    REJUNK --> END5([End])
+
+    REGCHK -->|"Yes"| DENY{"Path resolves to a\ndrive root / system folder?\n(deterministic code check)"}
+    DENY -->|"YES - forbidden"| HARDBLOCK["Hard refuse immediately\nNO confirmation offered, ever\nsuggest safe alternative"]
+    HARDBLOCK --> END6([End])
+
+    DENY -->|"No"| PGUARD["Llama Prompt Guard 2\npre-filter: injection/jailbreak?"]
+    PGUARD --> PGCHK{"Flagged?"}
+    PGCHK -->|"Yes"| BLOCKINJ["Blocked: prompt_injection"]
+    BLOCKINJ --> END7([End])
+
+    PGCHK -->|"No"| MGUARD["Llama Guard 4 12B\nCUSTOM taxonomy:\ndestructive_fs_op, credential_exfil,\nnetwork_exfil, malware_behavior"]
+    MGUARD --> GCHK{"Guardrail result"}
+    GCHK -->|"Groq unreachable"| FAILCLOSED["FAIL CLOSED\nblocked: guardrail_unavailable\n(never fails open)"]
+    FAILCLOSED --> END8([End])
+    GCHK -->|"Blocked"| BLOCKED["Blocked + reason + category\naudit: guardrail_blocked"]
+    BLOCKED --> END9([End])
+
+    GCHK -->|"Approved"| RISK{"Risk tier\n(fixed lookup, not LLM-decided)"}
+
+    %% ===== RISK-BASED CONFIRMATION =====
+    RISK -->|"medium/high\ne.g. delete_path, clean_temp"| DRYRUN["Dry-run preview:\nitem count, size, sample paths\n(nothing deleted yet)"]
+    DRYRUN --> C1["SweetAlert #1:\npreview + Continue/Cancel"]
+    C1 --> C2["SweetAlert #2:\ntype exact path to confirm"]
+    C2 --> C3["SweetAlert #3:\n3s delay, final irreversible confirm"]
+    C3 --> CCHK{"All 3 steps\nconfirmed?"}
+    CCHK -->|"abandoned/timeout"| DRAFTEXP["Draft expires (24h)\nstatus: archived, nothing runs"]
+    DRAFTEXP --> END10([End])
+    CCHK -->|"confirmed"| AMBIG
+
+    RISK -->|"low\ne.g. send_email, web_search"| AMBIG{"Ambiguous\nparameters?"}
+
+    %% ===== DECISION AGENT (LangGraph) =====
+    AMBIG -->|"Yes, e.g. 'when it's full'"| ASKUSER["LangGraph interrupt:\nask clarifying question"]
+    ASKUSER --> WAITUSER["Pause, wait for user's answer\n(checkpointed, survives restart)"]
+    WAITUSER --> RESOLVE["Resolve plan field\nwith user's answer"]
+    RESOLVE --> AMBIG
+
+    AMBIG -->|"No"| FINALIZE["Finalize trigger config"]
+    FINALIZE -.->|"full node-by-node trace"| LANGSMITH[("LangSmith\nagent decision tracing")]
+
+    FINALIZE --> IMMCHK{"Immediate command\nor recurring automation?"}
+    IMMCHK -->|"immediate, run once"| DIRECT["Dispatch directly to\nExecution Sandbox"]
+    IMMCHK -->|"recurring"| PERSIST["Persist automation\nstatus=active in PostgreSQL"]
+
+    %% ===== TRIGGER ENGINE =====
+    PERSIST --> REGTRIG["Register with Trigger Engine"]
+    REGTRIG --> TTYPE{"Trigger type?"}
+    TTYPE -->|"time"| SCHED["APScheduler job\n(UTC-converted, user timezone stored)"]
+    TTYPE -->|"threshold"| WATCH["Threshold watcher\npolls every N sec"]
+
+    WATCH --> MSRC{"Fresh host-agent\nmetric available?"}
+    MSRC -->|"Yes"| REALM["Use real pushed metric\n(metric_source=host_agent)"]
+    MSRC -->|"No"| MOCKM["Use mock/demo endpoint\n(metric_source=mock_fallback)"]
+    REALM --> TCHK{"Condition met?"}
+    MOCKM --> TCHK
+    TCHK -->|"No"| WATCH
+    TCHK -->|"Yes"| CDCHK{"Inside cooldown\nwindow?"}
+    CDCHK -->|"Yes, suppress"| WATCH
+    CDCHK -->|"No"| ENQ["Enqueue job to Redis"]
+    SCHED -->|"fires at scheduled time"| ENQ
+
+    %% ===== EXECUTION =====
+    ENQ --> QUEUE[("Redis Queue")]
+    DIRECT --> QUEUE
+    QUEUE --> DISPATCH["Execution Sandbox\nconsumes job"]
+    DISPATCH --> IDEM{"Already executed\nthis trigger_window?"}
+    IDEM -->|"Yes"| SKIPDUP["Skip, return prior result\n(idempotency guarantee)"]
+    SKIPDUP --> AUDIT
+
+    IDEM -->|"No"| HOSTCHK{"Needs host machine?\ne.g. empty_trash, delete_path,\ncheck_disk_usage"}
+    HOSTCHK -->|"Yes"| HOSTJOB["Write to host_agent_jobs\n(host-agent polls, not pushed to)"]
+    HOSTJOB --> HRES{"Result received\nwithin timeout?"}
+    HRES -->|"No"| DEADLTR["3 retries, then\ndead-letter queue"]
+    DEADLTR --> AUDIT
+    HRES -->|"Yes"| REC["Record execution result"]
+
+    HOSTCHK -->|"No, container-native"| RUNACT["Invoke registered action\n(fixed action registry only)"]
+    RUNACT --> REC
+
+    REC --> AUDIT[("PostgreSQL\naudit_log + execution_log\nimmutable record")]
+    AUDIT --> NOTIFY["Update UI status,\nnotify user"]
+    NOTIFY --> ENDALL([Done])
+
+    %% ===== OBSERVABILITY (applies throughout) =====
+    TRACENEST[("TraceNest\napp/request logs\nevery service, every request")]
+    PARSE -.-> TRACENEST
+    MGUARD -.-> TRACENEST
+    DISPATCH -.-> TRACENEST

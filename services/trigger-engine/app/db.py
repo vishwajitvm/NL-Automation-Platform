@@ -79,3 +79,30 @@ def log_audit_event(event_type: str, payload: Dict[str, Any], automation_id: Opt
         conn.close()
     except Exception as e:
         logger.error(f"Error recording audit log: {e}")
+
+
+def get_recent_host_agent_metric(metric_name: str, max_age_seconds: int = 60) -> Optional[float]:
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT value
+            FROM host_agent_metrics
+            WHERE (metric_name = %s OR (%s IN ('recycle_bin_percentage', 'trash_usage_pct') AND metric_name IN ('recycle_bin_percentage', 'trash_usage_pct')))
+              AND reported_at >= (now() - (%s || ' seconds')::interval)
+            ORDER BY reported_at DESC
+            LIMIT 1;
+            """,
+            (metric_name, metric_name, max_age_seconds)
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row is not None:
+            return float(row[0])
+        return None
+    except Exception as e:
+        logger.error(f"Error checking recent host agent metric: {e}")
+        return None
+
