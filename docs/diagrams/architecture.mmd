@@ -1,0 +1,46 @@
+flowchart TB
+    subgraph Client["Client Layer"]
+        UI["Web UI (Next.js)\nChat-style automation composer"]
+    end
+
+    subgraph Gateway["API Layer (FastAPI)"]
+        API["REST/WS Gateway"]
+        AUTH["Auth Service (JWT)"]
+    end
+
+    subgraph Brain["Reasoning Layer"]
+        PARSE["Intent Parser\n(Gemini 2.5 Flash, free tier)"]
+        GUARD["Guardrail Classifier\n(Groq Llama Guard 4 12B, hosted)"]
+        AGENT["Decision Agent\n(LangGraph + LangSmith tracing)"]
+    end
+
+    subgraph Runtime["Automation Runtime"]
+        TRIGGER["Trigger Engine\n(scheduler + watchers)"]
+        QUEUE["Job Queue (Redis)"]
+        EXEC["Execution Sandbox\n(MCP action registry)"]
+    end
+
+    subgraph Data["Data Layer"]
+        PG[("PostgreSQL\nautomations, users, audit_log")]
+    end
+
+    subgraph Obs["Observability"]
+        TN["TraceNest\n(app/request logs)"]
+        LS["LangSmith\n(agent decision traces)"]
+    end
+
+    UI -->|"clean my recycle bin at 80%"| API
+    API --> AUTH
+    API --> PARSE
+    PARSE --> GUARD
+    GUARD -->|blocked| API
+    GUARD -->|approved| AGENT
+    AGENT --> PG
+    AGENT --> TRIGGER
+    TRIGGER --> QUEUE
+    QUEUE --> EXEC
+    EXEC -->|registered actions only| PG
+    EXEC -->|result / audit| PG
+    PG -->|status| UI
+    API -.-> TN
+    AGENT -.-> LS

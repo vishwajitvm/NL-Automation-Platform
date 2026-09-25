@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant T as Trigger Engine
+    participant Q as Redis Queue
+    participant E as Execution Sandbox
+    participant R as Action Registry (MCP)
+    participant DB as PostgreSQL
+    participant U as User (notification)
+
+    loop every poll interval
+        T->>T: check condition (e.g. bin size >= 80%)
+    end
+    T->>Q: enqueue job (automation_id)
+    Q->>E: dispatch job
+    E->>R: invoke registered action only
+    R-->>E: result (success/fail)
+    E->>DB: write audit_log entry
+    E->>U: notify (optional)

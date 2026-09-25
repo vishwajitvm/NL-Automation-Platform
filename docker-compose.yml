@@ -1,0 +1,185 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nl_automation
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nl_automation"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nl-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - nl-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: services/db-migrate/Dockerfile
+    container_name: nl-db-migrate
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nl_automation}
+    networks:
+      - nl-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: nl-api-gateway
+    restart: unless-stopped
+    ports:
+      - "${API_GATEWAY_PORT:-8080}:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nl_automation}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - api_gateway_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  intent-parser:
+    build:
+      context: .
+      dockerfile: services/intent-parser/Dockerfile
+    container_name: nl-intent-parser
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - intent_parser_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+
+  guardrail:
+    build:
+      context: .
+      dockerfile: services/guardrail/Dockerfile
+    container_name: nl-guardrail
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - guardrail_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+
+  decision-agent:
+    build:
+      context: .
+      dockerfile: services/decision-agent/Dockerfile
+    container_name: nl-decision-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - decision_agent_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+
+  trigger-engine:
+    build:
+      context: .
+      dockerfile: services/trigger-engine/Dockerfile
+    container_name: nl-trigger-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nl_automation}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - trigger_engine_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  execution-sandbox:
+    build:
+      context: .
+      dockerfile: services/execution-sandbox/Dockerfile
+    container_name: nl-execution-sandbox
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nl_automation}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - execution_sandbox_logs:/app/TraceNestLogs
+    networks:
+      - nl-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nl-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3001}:3000"
+    networks:
+      - nl-network
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_gateway_logs:
+  intent_parser_logs:
+  guardrail_logs:
+  decision_agent_logs:
+  trigger_engine_logs:
+  execution_sandbox_logs:
+
+networks:
+  nl-network:
+    driver: bridge

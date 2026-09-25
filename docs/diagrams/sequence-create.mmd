@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant U as User
+    participant W as Web UI
+    participant A as API Gateway
+    participant P as Intent Parser (Gemini)
+    participant G as Guardrail (Groq Llama Guard 4)
+    participant D as Decision Agent (LangGraph)
+    participant DB as PostgreSQL
+
+    U->>W: Types "clean recycle bin at 80%"
+    W->>A: POST /automations (raw text)
+    A->>P: parse_intent(text)
+    P-->>A: structured plan {trigger, action, params}
+    A->>G: classify(structured plan)
+    alt unsafe / destructive
+        G-->>A: BLOCKED + reason
+        A-->>W: 400 explain why + suggest alternative
+    else safe
+        G-->>A: APPROVED
+        A->>D: resolve_ambiguity(plan)
+        D-->>A: final plan (may ask clarifying question)
+        A->>DB: save automation (status=active)
+        A-->>W: 201 created, show summary
+    end
