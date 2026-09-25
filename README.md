@@ -101,20 +101,24 @@ flowchart TD
     UI -->|Sends to| Gateway[API Gateway - The Front Desk]:::gateway
     
     subgraph Brain ['The AI Brain: Understanding & Safety']
-        Gateway -->|1. Translates English| Parser[Intent Parser: Breaks sentence into Trigger & Action]:::brain
-        Parser -->|2. Safety Inspection| Guard[Security Guard: Blocks dangerous or hacking commands]:::security
-        Guard -->|3. Clarification Check| Agent[Decision Agent: Asks clarifying questions if vague]:::brain
+        Gateway -->|1. Screens Content| Router[Request Router: Blocks illegal & disallowed requests]:::security
+        Router -->|2. Translates English| Parser[Intent Parser: Breaks sentence into Trigger & Action]:::brain
+        Parser -->|3. Safety Inspection| Guard[Security Guard: Blocks hacking & destructive commands]:::security
+        Guard -->|4. Clarification Check| Agent[Decision Agent: Asks clarifying questions if vague]:::brain
     end
     
     subgraph Runtime ['The Automation Runtime: Watching & Doing']
         Agent -->|Registers Rule| Engine[Trigger Engine: Watches time & system metrics 24/7]:::runtime
         Engine -->|Condition Met!| Queue[Job Queue: Orders tasks safely]:::runtime
         Queue -->|Executes Action| Sandbox[Execution Sandbox: Runs safe, pre-approved actions only]:::runtime
+        Sandbox -->|Host Operations| HostAgent[Host Agent: Cleans recycle bin, drives & safe browser]:::runtime
     end
     
-    subgraph History ['Memory & Flight Recorder']
-        Sandbox -->|Records outcome| Database[(PostgreSQL Database: Stores automations & audit logs)]:::data
-        Sandbox -->|Agent reasoning traces| Tracing[LangSmith Tracing]:::data
+    subgraph Obs ['Tri-Pillar Observability & Flight Recorder']
+        Gateway -.->|Real-time request logs| TraceNest[TraceNest: Live logs at localhost:8080/tracenest]:::obs
+        Sandbox -.->|Execution telemetry| TraceNest
+        Sandbox -->|Records business outcome| Database[(PostgreSQL Database: Stores automations & audit logs)]:::data
+        Agent -.->|Agent reasoning traces| Tracing[LangSmith Tracing]:::data
     end
 
     classDef client fill:#3b82f6,stroke:#1d4ed8,color:#ffffff,stroke-width:2px;
@@ -123,10 +127,11 @@ flowchart TD
     classDef security fill:#ef4444,stroke:#b91c1c,color:#ffffff,stroke-width:2px;
     classDef runtime fill:#10b981,stroke:#047857,color:#ffffff,stroke-width:2px;
     classDef data fill:#f59e0b,stroke:#b45309,color:#ffffff,stroke-width:2px;
+    classDef obs fill:#8b5cf6,stroke:#4c1d95,color:#ffffff,stroke-width:2px;
 ```
 
 <div align="center">
-  <img src="https://mermaid.ink/img/Zmxvd2NoYXJ0IFRECiAgICBVc2VyKFtZb3UgLyBVc2VyXSk6OjpjbGllbnQgLS0+fFR5cGVzOiAnQ2xlYW4gbXkgcmVjeWNsZSBiaW4gYXQgODAlJ3wgVUlbV2ViIEludGVyZmFjZV06OjpjbGllbnQKICAgIFVJIC0tPnxTZW5kcyB0b3wgR2F0ZXdheVtBUEkgR2F0ZXdheSAtIFRoZSBGcm9udCBEZXNrXTo6OmdhdGV3YXkKICAgIAogICAgc3ViZ3JhcGggQnJhaW4gWydUaGUgQUkgQnJhaW46IFVuZGVyc3RhbmRpbmcgJiBTYWZldHknXQogICAgICAgIEdhdGV3YXkgLS0+fDEuIFRyYW5zbGF0ZXMgRW5nbGlzaHwgUGFyc2VyW0ludGVudCBQYXJzZXI6IEJyZWFrcyBzZW50ZW5jZSBpbnRvIFRyaWdnZXIgJiBBY3Rpb25dOjo6YnJhaW4KICAgICAgICBQYXJzZXIgLS0+fDIuIFNhZmV0eSBJbnNwZWN0aW9ufCBHdWFyZFtTZWN1cml0eSBHdWFyZDogQmxvY2tzIGRhbmdlcm91cyBvciBoYWNraW5nIGNvbW1hbmRzXTo6OnNlY3VyaXR5CiAgICAgICAgR3VhcmQgLS0+fDMuIENsYXJpZmljYXRpb24gQ2hlY2t8IEFnZW50W0RlY2lzaW9uIEFnZW50OiBBc2tzIGNsYXJpZnlpbmcgcXVlc3Rpb25zIGlmIHZhZ3VlXTo6OmJyYWluCiAgICBlbmQKICAgIAogICAgc3ViZ3JhcGggUnVudGltZSBbJ1RoZSBBdXRvbWF0aW9uIFJ1bnRpbWU6IFdhdGNoaW5nICYgRG9pbmcnXQogICAgICAgIEFnZW50IC0tPnxSZWdpc3RlcnMgUnVsZXwgRW5naW5lW1RyaWdnZXIgRW5naW5lOiBXYXRjaGVzIHRpbWUgJiBzeXN0ZW0gbWV0cmljcyAyNC83XTo6OnJ1bnRpbWUKICAgICAgICBFbmdpbmUgLS0+fENvbmRpdGlvbiBNZXQhfCBRdWV1ZVtKb2Job3B0cyBPcmRlcnMgdGFza3Mgc2FmZWx5XTo6OnJ1bnRpbWUKICAgICAgICBRdWV1ZSAtLT58RXhlY3V0ZXMgQWN0aW9ufCBTYW5kYm94W0V4ZWN1dGlvbiBTYW5kYm94OiBSdW5zIHNhZmUsIHByZS1hcHByb3ZlZCBhY3Rpb25zIG9ubHldOjo6cnVudGltZQogICAgZW5kCiAgICAKICAgIHN1YmdyYXBoIEhpc3RvcnkgWydNZW1vcnkgJiBGbGlnaHQgUmVjb3JkZXInXQogICAgICAgIFNhbmRib3ggLS0+fFJlY29yZHMgb3V0Y29tZXwgRGF0YWJhc2VbKFBvc3RncmVTUUwgRGF0YWJhc2U6IFN0b3JlcyBhdXRvbWF0aW9ucyAmIGF1ZGl0IGxvZ3MpXTo6OmRhdGEKICAgICAgICBTYW5kYm94IC0tPnxBZ2VudCByZWFzb25pbmcgdHJhY2VzfCBUcmFjaW5nW0xhbmdTbWl0aCBUcmFjaW5nKTo6OmRhdGEKICAgIGVuZAoKICAgIGNsYXNzRGVmIGNsaWVudCBmaWxsOiMzYjgyZjYsc3Ryb2tlOiMxZDRlZDgsY29sb3I6I2ZmZmZmZixzdHJva2Utd2lkdGg6MnB4OwogICAgY2xhc3NEZWYgZ2F0ZXdheSBmaWxsOiM2MzY2ZjEsc3Ryb2tlOiM0MzM4Y2EsY29sb3I6I2ZmZmZmZixzdHJva2Utd2lkdGg6MnB4OwogICAgY2xhc3NEZWYgYnJhaW4gZmlsbDojOGI1Y2Y2LHN0cm9rZTojNmQyOGQ5LGNvbG9yOiNmZmZmZmYsc3Ryb2tlLXdpZHRoOjJweDsKICAgIGNsYXNzRGVmIHNlY3VyaXR5IGZpbGw6I2VmNDQ0NCxzdHJva2U6I2I5MWMxYyxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7CiAgICBjbGFzc0RlZiBydW50aW1lIGZpbGw6IzEwYjk4MSxzdHJva2U6IzA0Nzg1Nyxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7CiAgICBjbGFzc0RlZiBkYXRhIGZpbGw6I2Y1OWUwYixzdHJva2U6I2I0NTMwOSxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7" alt="System Architecture Overview" width="850"/>
+  <img src="https://mermaid.ink/img/Zmxvd2NoYXJ0IFRECiAgICBVc2VyKFtZb3UgLyBVc2VyXSk6OjpjbGllbnQgLS0+fFR5cGVzOiAnQ2xlYW4gbXkgcmVjeWNsZSBiaW4gYXQgODAlJ3wgVUlbV2ViIEludGVyZmFjZV06OjpjbGllbnQKICAgIFVJIC0tPnxTZW5kcyB0b3wgR2F0ZXdheVtBUEkgR2F0ZXdheSAtIFRoZSBGcm9udCBEZXNrXTo6OmdhdGV3YXkKICAgIAogICAgc3ViZ3JhcGggQnJhaW4gWydUaGUgQUkgQnJhaW46IFVuZGVyc3RhbmRpbmcgJiBTYWZldHknXQogICAgICAgIEdhdGV3YXkgLS0+fDEuIFNjcmVlbnMgQ29udGVudHwgUm91dGVyW1JlcXVlc3QgUm91dGVyOiBCbG9ja3MgaWxsZWdhbCAmIGRpc2FsbG93ZWQgcmVxdWVzdHNdOjo6c2VjdXJpdHkKICAgICAgICBSb3V0ZXIgLS0+fDIuIFRyYW5zbGF0ZXMgRW5nbGlzaHwgUGFyc2VyW0ludGVudCBQYXJzZXI6IEJyZWFrcyBzZW50ZW5jZSBpbnRvIFRyaWdnZXIgJiBBY3Rpb25dOjo6YnJhaW4KICAgICAgICBQYXJzZXIgLS0+fDMuIFNhZmV0eSBJbnNwZWN0aW9ufCBHdWFyZFtTZWN1cml0eSBHdWFyZDogQmxvY2tzIGhhY2tpbmcgJiBkZXN0cnVjdGl2ZSBjb21tYW5kc106OjpzZWN1cml0eQogICAgICAgIEd1YXJkIC0tPnw0LiBDbGFyaWZpY2F0aW9uIENoZWNrfCBBZ2VudFtEZWNpc2lvbiBBZ2VudDogQXNrcyBjbGFyaWZ5aW5nIHF1ZXN0aW9ucyBpZiB2YWd1ZV06OjpicmFpbgogICAgZW5kCiAgICAKICAgIHN1YmdyYXBoIFJ1bnRpbWUgWydUaGUgQXV0b21hdGlvbiBSdW50aW1lOiBXYXRjaGluZyAmIERvaW5nJ10KICAgICAgICBBZ2VudCAtLT58UmVnaXN0ZXJzIFJ1bGV8IEVuZ2luZVtUcmlnZ2VyIEVuZ2luZTogV2F0Y2hlcyB0aW1lICYgc3lzdGVtIG1ldHJpY3MgMjQvN106OjpydW50aW1lCiAgICAgICAgRW5naW5lIC0tPnxDb25kaXRpb24gTWV0IXwgUXVldWVbSm9iIFF1ZXVlOiBPcmRlcnMgdGFza3Mgc2FmZWx5XTo6OnJ1bnRpbWUKICAgICAgICBRdWV1ZSAtLT58RXhlY3V0ZXMgQWN0aW9ufCBTYW5kYm94W0V4ZWN1dGlvbiBTYW5kYm94OiBSdW5zIHNhZmUsIHByZS1hcHByb3ZlZCBhY3Rpb25zIG9ubHldOjo6cnVudGltZQogICAgICAgIFNhbmRib3ggLS0+fEhvc3QgT3BlcmF0aW9uc3wgSG9zdEFnZW50W0hvc3QgQWdlbnQ6IENsZWFucyByZWN5Y2xlIGJpbiwgZHJpdmVzICYgc2FmZSBicm93c2VyXTo6OnJ1bnRpbWUKICAgIGVuZAogICAgCiAgICBzdWJncmFwaCBPYnMgWydUcmktUGlsbGFyIE9ic2VydmFiaWxpdHkgJiBGbGlnaHQgUmVjb3JkZXInXQogICAgICAgIEdhdGV3YXkgLS4tPnxSZWFsLXRpbWUgcmVxdWVzdCBsb2dzfCBUcmFjZU5lc3RbVHJhY2VOZXN0OiBMaXZlIGxvZ3MgYXQgbG9jYWxob3N0OjgwODAvdHJhY2VuZXN0XTo6Om9icwogICAgICAgIFNhbmRib3ggLS4tPnxFeGVjdXRpb24gdGVsZW1ldHJ5fCBUcmFjZU5lc3QKICAgICAgICBTYW5kYm94IC0tPnxSZWNvcmRzIGJ1c2luZXNzIG91dGNvbWV8IERhdGFiYXNlWyhQb3N0Z3JlU1FMIERhdGFiYXNlOiBTdG9yZXMgYXV0b21hdGlvbnMgJiBhdWRpdCBsb2dzKV06OjpkYXRhCiAgICAgICAgQWdlbnQgLS4tPnxBZ2VudCByZWFzb25pbmcgdHJhY2VzfCBUcmFjaW5nW0xhbmdTbWl0aCBUcmFjaW5nXTo6OmRhdGEKICAgIGVuZAoKICAgIGNsYXNzRGVmIGNsaWVudCBmaWxsOiMzYjgyZjYsc3Ryb2tlOiMxZDRlZDgsY29sb3I6I2ZmZmZmZixzdHJva2Utd2lkdGg6MnB4OwogICAgY2xhc3NEZWYgZ2F0ZXdheSBmaWxsOiM2MzY2ZjEsc3Ryb2tlOiM0MzM4Y2EsY29sb3I6I2ZmZmZmZixzdHJva2Utd2lkdGg6MnB4OwogICAgY2xhc3NEZWYgYnJhaW4gZmlsbDojOGI1Y2Y2LHN0cm9rZTojNmQyOGQ5LGNvbG9yOiNmZmZmZmYsc3Ryb2tlLXdpZHRoOjJweDsKICAgIGNsYXNzRGVmIHNlY3VyaXR5IGZpbGw6I2VmNDQ0NCxzdHJva2U6I2I5MWMxYyxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7CiAgICBjbGFzc0RlZiBydW50aW1lIGZpbGw6IzEwYjk4MSxzdHJva2U6IzA0Nzg1Nyxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7CiAgICBjbGFzc0RlZiBkYXRhIGZpbGw6I2Y1OWUwYixzdHJva2U6I2I0NTMwOSxjb2xvcjojZmZmZmZmLHN0cm9rZS13aWR0aDoycHg7CiAgICBjbGFzc0RlZiBvYnMgZmlsbDojOGI1Y2Y2LHN0cm9rZTojNGMxZDk1LGNvbG9yOiNmZmZmZmYsc3Ryb2tlLXdpZHRoOjJweDs= alt="System Architecture Overview" width="850"/>
   <p><em>Figure 1: Bird's-Eye View of the Platform Architecture</em></p>
 </div>
 

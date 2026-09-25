@@ -1,37 +1,42 @@
 flowchart TB
     subgraph Client["Client Layer"]
-        UI["Web UI (Next.js)\nChat-style automation composer"]
+        UI["Web UI (Next.js :3001)\nChat Composer + SweetAlert2 Safeguards"]
     end
 
-    subgraph Gateway["API Layer (FastAPI)"]
-        API["REST/WS Gateway"]
+    subgraph Gateway["API Layer (FastAPI :8080)"]
+        API["REST Gateway & Router"]
         AUTH["Auth Service (JWT)"]
+        TNDASH["TraceNest Dashboard\n(http://localhost:8080/tracenest)"]
     end
 
     subgraph Brain["Reasoning Layer"]
-        PARSE["Intent Parser\n(Gemini 2.5 Flash, free tier)"]
-        GUARD["Guardrail Classifier\n(Groq Llama Guard 4 12B, hosted)"]
-        AGENT["Decision Agent\n(LangGraph + LangSmith tracing)"]
+        ROUTER["Request Router (POST /route)\nContent Policy Screening"]
+        PARSE["Intent Parser\n(Gemini 2.5 Flash / Groq fallback)"]
+        GUARD["Guardrail Classifier\n(Prompt Guard 2 + Llama Guard 4)"]
+        AGENT["Decision Agent\n(LangGraph + Destructive Risk Tiers)"]
     end
 
     subgraph Runtime["Automation Runtime"]
-        TRIGGER["Trigger Engine\n(scheduler + watchers)"]
+        TRIGGER["Trigger Engine\n(APScheduler + Metrics Watcher)"]
         QUEUE["Job Queue (Redis)"]
-        EXEC["Execution Sandbox\n(MCP action registry)"]
+        EXEC["Execution Sandbox\n(MCP Action Registry)"]
+        HOST["Host Agent (OS Native Daemon)\n(Trash, Browser Profile, Denylist)"]
     end
 
     subgraph Data["Data Layer"]
-        PG[("PostgreSQL\nautomations, users, audit_log")]
+        PG[("PostgreSQL\nAutomations, Confirmations, Audit Log")]
     end
 
-    subgraph Obs["Observability"]
-        TN["TraceNest\n(app/request logs)"]
-        LS["LangSmith\n(agent decision traces)"]
+    subgraph Obs["Unified Observability"]
+        TN["TraceNest SDK (v0.1.18)\nStructured JSONL + Symlink Aggregator"]
+        LS["LangSmith\n(Agent Graph Traces)"]
     end
 
-    UI -->|"clean my recycle bin at 80%"| API
+    UI -->|"Prompt / Command"| API
     API --> AUTH
-    API --> PARSE
+    API --> ROUTER
+    ROUTER -->|"automation lane"| PARSE
+    ROUTER -->|"disallowed lane"| API
     PARSE --> GUARD
     GUARD -->|blocked| API
     GUARD -->|approved| AGENT
@@ -39,8 +44,18 @@ flowchart TB
     AGENT --> TRIGGER
     TRIGGER --> QUEUE
     QUEUE --> EXEC
-    EXEC -->|registered actions only| PG
-    EXEC -->|result / audit| PG
+    EXEC -->|host jobs| HOST
+    EXEC -->|native actions| PG
+    HOST -->|job results / metrics| API
     PG -->|status| UI
+
+    %% Observability Streams
     API -.-> TN
+    PARSE -.-> TN
+    GUARD -.-> TN
+    AGENT -.-> TN
+    TRIGGER -.-> TN
+    EXEC -.-> TN
+    HOST -.-> TN
+    TN -.-> TNDASH
     AGENT -.-> LS

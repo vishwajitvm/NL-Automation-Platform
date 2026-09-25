@@ -99,3 +99,26 @@ Phrases such as *"clean my C drive"* or *"free up space on disk"* are strictly m
 ### 4.5 Deliberate UX Friction: 3-Second Countdown
 To prevent reflex-clicking on dangerous actions, the final SweetAlert2 confirmation modal disables the confirm button for a mandatory 3-second delay upon display, ensuring genuine user consideration before execution.
 
+---
+
+## 5. Observability, TraceNest Secret Redaction & Logging Safeguards
+
+### 5.1 In-Flight Secret Redaction
+- All log messages passing through `TraceNestLoggingHandler` or standard Python `logging` pass through `shared/redaction.py` before hitting disk.
+- Automatically redacts API keys (`sk-...`, `gsk_...`, `AIza...`), Bearer tokens, Authorization headers, and sensitive parameters matching secret regexes.
+- Prevents accidental token leakage across log files and TraceNest Web UI dashboards.
+
+### 5.2 Non-Blocking, Fail-Safe Logging Architecture
+- Logging operations in `shared/logging_config.py` are strictly enclosed in exception guards.
+- A disk write failure, formatting anomaly, or TraceNest handler exception will **never** bubble up to break request handling, alter security policy checks, or cause a fail-open loophole.
+
+### 5.3 Tri-Pillar Separation of Concerns
+1. **TraceNest (Real-Time System Observability)**:
+   - High-cardinality runtime telemetry, HTTP metadata (`duration_ms`, `trace_id`), source code line numbers, and granular debug/trace logs.
+   - Hosted at `http://localhost:8080/tracenest`.
+2. **LangSmith (Agentic Decision Traces)**:
+   - LLM reasoning traces, prompt token counts, and state machine graph checkpoints.
+3. **PostgreSQL Flight Recorder (`audit_log` & `execution_log`)**:
+   - Strictly immutable business-domain records (`guardrail_approved`, `guardrail_blocked`, `content_policy_blocked`, `trigger_fired`, `action_executed`).
+   - Guarantees execution idempotency and provable accountability.
+

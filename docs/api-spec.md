@@ -192,13 +192,66 @@ Query the immutable PostgreSQL audit trail.
 
 ---
 
+### `POST /api/v1/commands`
+Execute an immediate one-off command without scheduling a recurring trigger. Pre-checks the hard filesystem denylist before dispatching.
+
+- **Request Body (`application/json`):**
+  ```json
+  {
+    "text": "Clean my temp files and cache",
+    "timezone": "Asia/Calcutta"
+  }
+  ```
+- **Response `200 OK`:**
+  ```json
+  {
+    "id": "1250689a-692c-42b1-9345-83c64104f95a",
+    "status": "executed",
+    "plan": {
+      "raw_text": "Clean my temp files and cache",
+      "trigger": { "type": "immediate", "params": {} },
+      "action": {
+        "name": "clean_temp_and_cache",
+        "params": {},
+        "risk_tier": "medium"
+      },
+      "ambiguities": [],
+      "parseable": true
+    },
+    "executed_at": "2026-09-26T00:00:00Z"
+  }
+  ```
+
+---
+
+### `GET /tracenest` & `GET /tracenest/`
+The unified TraceNest real-time observability dashboard. Visiting `/tracenest` yields a `307 Temporary Redirect` to `/tracenest/`, serving the interactive HTML/JS log analyzer.
+
+- **API Sub-routes:**
+  - `GET /tracenest/api/logs`: Returns an array of available log files across all microservices (aggregated via symlink).
+  - `GET /tracenest/api/logs/{filename}`: Streams parsed JSON Lines from a specific log file with level filtering and search query support.
+
+---
+
+### Host Agent Management (`/api/v1/host-agent`)
+- `POST /api/v1/host-agent/register`: Registers a host machine daemon; returns an authenticated host token.
+- `POST /api/v1/host-agent/metrics`: Pushes disk usage, trash percentage, and system metrics from the host agent to the gateway.
+- `GET /api/v1/host-agent/jobs/poll`: Long-polls or fetches queued jobs intended for the host agent (`empty_trash`, `check_disk_usage`, `list_drives`, `clean_temp_and_cache`, `delete_path`, `browser_*`).
+- `POST /api/v1/host-agent/jobs/{job_id}/result`: Submits execution status and details back to the platform.
+
+---
+
 ## 3. Internal Microservice APIs (`nl-network`)
 
 ### Intent Parser (`http://intent-parser:8000`)
+- `POST /route`: Classifies raw text before parsing into one of 3 operational lanes:
+  - `disallowed_content` (Groq Llama Guard 4 default taxonomy)
+  - `informational_query` (direct read-only search)
+  - `automation` (dispatches to LLM parser)
 - `POST /parse`: Accepts `{"raw_text": string}`. Returns `AutomationPlan` via Gemini 2.5 Flash → Groq → OpenRouter failover chain. Returns 422 if multiple intents are detected.
 
 ### Guardrail Service (`http://guardrail:8000`)
-- `POST /classify`: Accepts `AutomationPlan`. Performs Stage 0 registry pre-gate, Stage 1 Prompt Guard pre-filter, Stage 2 Llama Guard 4 custom taxonomy classifier. Fails closed.
+- `POST /classify`: Accepts `AutomationPlan`. Performs Stage 0 registry pre-gate, Stage 1 Prompt Guard pre-filter, Stage 2 Llama Guard 4 / OpenAI Safeguard classifier. Fails closed.
 
 ### Decision Agent (`http://decision-agent:8000`)
 - `POST /resolve`: Initiates LangGraph state machine. Pauses at `ask_user` on ambiguity; resumes via `POST /resume`. Traced via LangSmith.
@@ -210,6 +263,7 @@ Query the immutable PostgreSQL audit trail.
 - `GET /metrics/{metric_name}` & `POST /metrics/{metric_name}`: Stand-in threshold metric endpoint.
 
 ### Execution Sandbox (`http://execution-sandbox:8000`)
-- `GET /mcp/tools`: Model Context Protocol schema discovery of allowlisted tools (`send_email`, `send_webhook`, `write_log_notification`, `run_http_healthcheck`, `empty_recycle_bin`).
+- `GET /mcp/tools`: Model Context Protocol schema discovery of allowlisted tools (`send_email`, `send_webhook`, `write_log_notification`, `run_http_healthcheck`, `empty_trash`, `check_disk_usage`, `list_drives`, `clean_temp_and_cache`, `delete_path`, `browser_*`).
 - `POST /mcp/call`: Executes an MCP tool strictly through the closed action registry.
 - `POST /execute`: Dispatches job with idempotency checking against `execution_log`.
+

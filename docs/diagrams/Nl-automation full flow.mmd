@@ -106,8 +106,57 @@ flowchart TD
     AUDIT --> NOTIFY["Update UI status,\nnotify user"]
     NOTIFY --> ENDALL([Done])
 
-    %% ===== OBSERVABILITY (applies throughout) =====
-    TRACENEST[("TraceNest\napp/request logs\nevery service, every request")]
-    PARSE -.-> TRACENEST
-    MGUARD -.-> TRACENEST
-    DISPATCH -.-> TRACENEST
+    %% ===== OBSERVABILITY & LOGGING ARCHITECTURE =====
+    subgraph Observability["Unified Tri-Pillar Observability Architecture"]
+        direction TB
+
+        subgraph TN_Pipeline["TraceNest Real-Time Platform Logging SDK (v0.1.18)"]
+            direction TB
+            HANDLER["TraceNestLoggingHandler\n(Stdlib logging bridge)"]
+            REDACT["Secret Redaction Filter\n(shared/redaction.py regex scrub)"]
+            LEVELS["Dynamic Log Levels\nTRACE(5), DEBUG, INFO, WARN, ERROR, CRITICAL\n+ duration_ms, line, func, trace_id"]
+            
+            HANDLER --> REDACT
+            REDACT --> LEVELS
+
+            subgraph Aggregation["Multi-Service Log Volume Aggregation"]
+                LOGS_LOCAL["Container Local JSONL Logs\n(/app/TraceNestLogs/YYYY-MM-DD.log)"]
+                VOL_MOUNTS["Docker Volume Mounts\n(/app/TraceNestLogs_services/<service>/)"]
+                DAEMON["API Gateway Symlink Aggregator\n(Auto-links service_YYYY-MM-DD.log)"]
+                
+                LOGS_LOCAL --> VOL_MOUNTS
+                VOL_MOUNTS --> DAEMON
+            end
+
+            LEVELS --> LOGS_LOCAL
+
+            subgraph TN_UI["TraceNest Observability Dashboard"]
+                TNDASH["Web UI Dashboard\nhttp://localhost:8080/tracenest\n(307 redirect to /tracenest/)"]
+                TNDROP["Dynamic Multi-Service Log Dropdown\n(api-gateway, intent-parser, guardrail,\ndecision-agent, trigger-engine, execution-sandbox)"]
+                NAVLINK["Frontend Web UI Navbar Link\n('TraceNest Logs' Button)"]
+                
+                DAEMON --> TNDASH
+                TNDASH --> TNDROP
+                NAVLINK -.->|"1-click access"| TNDASH
+            end
+        end
+
+        subgraph LangSmithTracing["LangSmith Agent Tracing"]
+            LSTRACE[("LangSmith Tracing\nLLM reasoning, token counts,\ngraph state checkpoints")]
+        end
+
+        subgraph BusinessAudit["PostgreSQL Flight Recorder"]
+            PGAUDIT[("PostgreSQL\naudit_log + execution_log\nimmutable business events")]
+        end
+    end
+
+    %% Service Logging Streams to TraceNest
+    ROUTER -.->|"TRACE / DEBUG / INFO"| HANDLER
+    PARSE -.->|"provider failover & tokens"| HANDLER
+    MGUARD -.->|"guardrail classification"| HANDLER
+    FINALIZE -.->|"decision events"| HANDLER
+    FINALIZE -.->|"reasoning traces"| LSTRACE
+    WATCH -.->|"metric evaluations & cooldown"| HANDLER
+    DISPATCH -.->|"sandbox action execution"| HANDLER
+    HOSTJOB -.->|"host agent operations"| HANDLER
+    REC -.->|"immutable audit record"| PGAUDIT
