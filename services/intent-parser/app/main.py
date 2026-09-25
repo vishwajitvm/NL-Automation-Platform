@@ -44,6 +44,7 @@ def health_check():
 async def parse_intent(req: ParseRequest):
     raw_text = req.raw_text.strip()
     if not raw_text:
+        logger.debug("Received empty raw_text in intent parser, returning unparseable plan")
         return AutomationPlan(
             raw_text=req.raw_text,
             parseable=False,
@@ -52,10 +53,13 @@ async def parse_intent(req: ParseRequest):
             ambiguities=[]
         )
 
+    logger.info(f"Parsing natural language intent: '{raw_text}'", extra={"extra_data": {"length": len(raw_text), "raw_text": raw_text}})
+
     try:
         parsed: ParsedResult = await chain.complete_structured(raw_text, ParsedResult)
+        logger.debug(f"LLM parsing completed: detected_count={parsed.detected_count}, parseable={parsed.parseable}")
     except AllProvidersExhaustedError as e:
-        logger.error(f"All providers exhausted during parsing: {e}")
+        logger.error(f"All LLM providers exhausted during intent parsing: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Intent Parser service unavailable: all LLM providers failed."
@@ -63,6 +67,7 @@ async def parse_intent(req: ParseRequest):
 
     # 1. Compound automation check
     if parsed.detected_count >= 2:
+        logger.warning(f"Rejected compound automation (count={parsed.detected_count}): '{raw_text}'")
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
@@ -74,6 +79,7 @@ async def parse_intent(req: ParseRequest):
 
     # 2. Unparseable / gibberish check
     if not parsed.parseable:
+        logger.warning(f"Unparseable intent detected for input: '{raw_text}'")
         return AutomationPlan(
             raw_text=raw_text,
             parseable=False,
@@ -81,6 +87,13 @@ async def parse_intent(req: ParseRequest):
             action=None,
             ambiguities=[]
         )
+
+    action_name = parsed.action.name if parsed.action else None
+    trigger_type = parsed.trigger.type if parsed.trigger else None
+    logger.info(
+        f"Intent parsed successfully: action='{action_name}', trigger='{trigger_type}', ambiguities={len(parsed.ambiguities)}",
+        extra={"extra_data": {"action": action_name, "trigger": trigger_type, "ambiguities": parsed.ambiguities}}
+    )
 
     # 3. Successful parse
     return AutomationPlan(

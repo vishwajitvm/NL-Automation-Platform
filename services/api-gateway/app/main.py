@@ -77,6 +77,7 @@ class JobResultRequest(BaseModel):
 @app.post("/api/v1/host-agents/tokens")
 def generate_agent_token():
     token, agent_id = create_host_agent_token()
+    logger.info(f"Generated new host agent token for agent_id={agent_id}", extra={"extra_data": {"agent_id": agent_id}})
     return {
         "token": token,
         "agent_id": agent_id,
@@ -86,6 +87,10 @@ def generate_agent_token():
 
 @app.post("/api/v1/host-agents/register")
 def register_agent(req: RegisterAgentRequest):
+    logger.info(
+        f"Host agent registration request: os={req.os_family}, distro={req.distro_name} {req.distro_version}, capabilities={req.capabilities}",
+        extra={"extra_data": {"os_family": req.os_family, "distro": req.distro_name, "caps": req.capabilities}}
+    )
     agent = register_host_agent(
         token=req.token,
         os_family=req.os_family,
@@ -98,17 +103,22 @@ def register_agent(req: RegisterAgentRequest):
         capabilities=req.capabilities
     )
     if not agent:
+        logger.warning(f"Unauthorized registration attempt with token prefix '{req.token[:8]}...'")
         raise HTTPException(status_code=401, detail="Invalid host agent registration token.")
+    logger.info(f"Host agent successfully registered: agent_id={agent.get('id')}, os={agent.get('os_family')}")
     return {"status": "online", "agent": agent}
 
 
 @app.post("/api/v1/host-agents/metrics")
 def post_agent_metric(req: AgentMetricRequest, x_agent_token: Optional[str] = Header(None, alias="X-Agent-Token")):
     if not x_agent_token:
+        logger.warning("Agent metric push rejected: Missing X-Agent-Token header")
         raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
     recorded = record_host_agent_metric(x_agent_token, req.metric, req.value)
     if not recorded:
+        logger.warning("Agent metric push rejected: Invalid host agent token")
         raise HTTPException(status_code=401, detail="Invalid host agent token")
+    logger.debug(f"Recorded host agent metric: {req.metric}={req.value}", extra={"extra_data": {"metric": req.metric, "val": req.value}})
     return {"status": "recorded", "metric": req.metric, "value": req.value}
 
 
@@ -117,6 +127,10 @@ def poll_agent_job(x_agent_token: Optional[str] = Header(None, alias="X-Agent-To
     if not x_agent_token:
         raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
     job = get_next_host_agent_job(x_agent_token)
+    if job:
+        logger.info(f"Dispatched pending job {job.get('id')} ({job.get('action_name')}) to host agent")
+    else:
+        logger.debug("Host agent job poll: no pending jobs")
     return {"job": job}
 
 
@@ -124,8 +138,10 @@ def poll_agent_job(x_agent_token: Optional[str] = Header(None, alias="X-Agent-To
 def submit_agent_job_result(job_id: str, req: JobResultRequest, x_agent_token: Optional[str] = Header(None, alias="X-Agent-Token")):
     if not x_agent_token:
         raise HTTPException(status_code=401, detail="Missing X-Agent-Token header")
+    logger.info(f"Host agent returned result for job {job_id}: status={req.status}", extra={"extra_data": {"job_id": job_id, "status": req.status, "result": req.result}})
     success = complete_host_agent_job(x_agent_token, job_id, req.status, req.result)
     if not success:
+        logger.error(f"Failed to record result for job {job_id}: unauthorized or not found")
         raise HTTPException(status_code=404, detail="Job not found or unauthorized")
     return {"status": "acknowledged", "job_id": job_id}
 
@@ -186,18 +202,24 @@ def get_all_audit(limit: int = 50):
 async def create_automation(req: CreateAutomationRequest):
     raw_text = req.text.strip()
     if not raw_text:
+        logger.warning("Empty automation request received")
         raise HTTPException(status_code=400, detail="I couldn't understand that.")
+
+    logger.info(f"Processing automation request: '{raw_text}' (tz={req.timezone})", extra={"extra_data": {"raw_text": raw_text, "tz": req.timezone}})
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # 0. Request Router Pre-Gate
         try:
+            logger.debug(f"Querying Request Router for text: '{raw_text}'")
             route_resp = await client.post(
                 f"{INTENT_PARSER_URL}/route",
                 json={"raw_text": raw_text}
             )
             if route_resp.status_code == 200:
                 route_data = route_resp.json()
+                logger.info(f"Request Router classification: lane='{route_data.get('lane')}' (reason='{route_data.get('reason')}')")
                 if route_data.get("lane") == "disallowed_content":
+                    logger.warning(f"Request blocked by content policy: reason={route_data.get('reason')}")
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
@@ -213,31 +235,41 @@ async def create_automation(req: CreateAutomationRequest):
 
         # 1. Intent Parser Call
         try:
+            logger.debug("Dispatching request to Intent Parser")
             parse_resp = await client.post(
                 f"{INTENT_PARSER_URL}/parse",
                 json={"raw_text": raw_text}
             )
         except Exception as e:
-            logger.error(f"Intent parser connection error: {e}")
+            logger.error(f"Intent parser connection error: {e}", exc_info=True)
             raise HTTPException(status_code=503, detail="Intent parser service unavailable")
 
         if parse_resp.status_code == 422:
             err_data = parse_resp.json()
+            logger.warning(f"Compound automation rejected: {err_data.get('detected_count', 0)} tasks detected")
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=err_data.get("message", "Please describe one automation at a time.")
             )
 
         if parse_resp.status_code != 200:
+            logger.error(f"Intent Parser failed with status {parse_resp.status_code}")
             raise HTTPException(status_code=parse_resp.status_code, detail="Failed to parse automation request")
 
         plan_data = parse_resp.json()
+        action_name = (plan_data.get("action") or {}).get("name")
+        trigger_type = (plan_data.get("trigger") or {}).get("type")
+        logger.debug(
+            f"Parsed plan: action={action_name}, trigger={trigger_type}, parseable={plan_data.get('parseable')}",
+            extra={"extra_data": {"plan": plan_data}}
+        )
 
         # Hard denylist check before confirmation modals are even offered
         action_obj = plan_data.get("action") or {}
         if action_obj.get("name") == "delete_path":
             target_path = action_obj.get("params", {}).get("path", "")
             if is_forbidden(target_path):
+                logger.warning(f"Hard denylist violation intercepted: '{target_path}'")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
@@ -253,19 +285,23 @@ async def create_automation(req: CreateAutomationRequest):
 
         # 2. Guardrail Safety Check
         try:
+            logger.debug("Dispatching plan to Security Guardrail Pre-Gate")
             guard_resp = await client.post(
                 f"{GUARDRAIL_URL}/classify",
                 json=plan_data
             )
         except Exception as e:
-            logger.error(f"Guardrail service connection error: {e}")
+            logger.error(f"Guardrail service connection error: {e}", exc_info=True)
             raise HTTPException(status_code=503, detail="Security guardrail service unavailable (fail-closed)")
 
         if guard_resp.status_code != 200:
+            logger.error(f"Security classification failed with status {guard_resp.status_code}")
             raise HTTPException(status_code=guard_resp.status_code, detail="Security classification failed")
 
         guard_data = guard_resp.json()
+        logger.info(f"Guardrail disposition: decision='{guard_data.get('decision')}', categories={guard_data.get('categories')}")
         if guard_data.get("decision") == "blocked":
+            logger.warning(f"Plan blocked by guardrails: categories={guard_data.get('categories')}, reason={guard_data.get('reason')}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -277,6 +313,7 @@ async def create_automation(req: CreateAutomationRequest):
             )
 
         if not plan_data.get("parseable", True):
+            logger.warning(f"Unparseable plan rejected for text: '{raw_text}'")
             raise HTTPException(status_code=400, detail="I couldn't understand that.")
 
         # 3. Check for duplicate/conflicting active automation
@@ -288,24 +325,29 @@ async def create_automation(req: CreateAutomationRequest):
                 sp.get("action", {}).get("name") == plan_data.get("action", {}).get("name") and
                 sp.get("trigger", {}).get("params") == plan_data.get("trigger", {}).get("params")
             ):
+                logger.info(f"Identified duplicate active automation: id={item.get('id')}")
                 break
 
         # 4. Decision Agent Resolution
         try:
+            logger.debug("Invoking LangGraph Decision Agent")
             decision_resp = await client.post(
                 f"{DECISION_AGENT_URL}/resolve",
                 json={"plan": plan_data}
             )
         except Exception as e:
-            logger.error(f"Decision agent connection error: {e}")
+            logger.error(f"Decision agent connection error: {e}", exc_info=True)
             raise HTTPException(status_code=503, detail="Decision agent service unavailable")
 
         if decision_resp.status_code != 200:
+            logger.error(f"Decision agent returned HTTP {decision_resp.status_code}")
             raise HTTPException(status_code=decision_resp.status_code, detail="Decision agent resolution failed")
 
         decision_data = decision_resp.json()
+        logger.info(f"Decision Agent resolved automation: id={decision_data.get('automation_id')}, status={decision_data.get('status')}")
 
         if decision_data.get("status") == "draft":
+            logger.info(f"Automation paused in draft: prompt='{decision_data.get('clarification_question')}'")
             return {
                 "id": decision_data["automation_id"],
                 "status": "draft",
@@ -317,6 +359,7 @@ async def create_automation(req: CreateAutomationRequest):
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
             }
 
+        logger.info(f"Automation successfully activated: id={decision_data['automation_id']}")
         return {
             "id": decision_data["automation_id"],
             "status": "active",
@@ -330,14 +373,20 @@ async def execute_immediate_command(req: CreateAutomationRequest):
     """Executes a one-off immediate command (trigger.type = 'immediate')"""
     raw_text = req.text.strip()
     if not raw_text:
+        logger.warning("Empty immediate command received")
         raise HTTPException(status_code=400, detail="I couldn't understand that.")
+
+    logger.info(f"Processing immediate command: '{raw_text}'", extra={"extra_data": {"command": raw_text}})
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Route
+        logger.debug(f"Routing immediate command: '{raw_text}'")
         route_resp = await client.post(f"{INTENT_PARSER_URL}/route", json={"raw_text": raw_text})
         if route_resp.status_code == 200:
             route_data = route_resp.json()
+            logger.info(f"Immediate command lane: '{route_data.get('lane')}' (reason='{route_data.get('reason')}')")
             if route_data.get("lane") == "disallowed_content":
+                logger.warning(f"Immediate command blocked by content policy: reason={route_data.get('reason')}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
@@ -348,12 +397,15 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                 )
 
         # Parse
+        logger.debug("Parsing immediate command into structured plan")
         parse_resp = await client.post(f"{INTENT_PARSER_URL}/parse", json={"raw_text": raw_text})
         if parse_resp.status_code != 200:
+            logger.error(f"Failed to parse immediate command: status={parse_resp.status_code}")
             raise HTTPException(status_code=parse_resp.status_code, detail="Failed to parse command request")
 
         plan_data = parse_resp.json()
         if not plan_data.get("parseable", True):
+            logger.warning(f"Immediate command is unparseable: '{raw_text}'")
             raise HTTPException(status_code=400, detail="I couldn't understand that.")
 
         # Ensure immediate trigger
@@ -364,6 +416,7 @@ async def execute_immediate_command(req: CreateAutomationRequest):
         if action_obj.get("name") == "delete_path":
             target_path = action_obj.get("params", {}).get("path", "")
             if is_forbidden(target_path):
+                logger.warning(f"Immediate command hard denylist violation: '{target_path}'")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
@@ -374,10 +427,13 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                 )
 
         # Guardrail check
+        logger.debug("Executing Guardrail check for immediate command")
         guard_resp = await client.post(f"{GUARDRAIL_URL}/classify", json=plan_data)
         if guard_resp.status_code == 200:
             guard_data = guard_resp.json()
+            logger.info(f"Immediate command guardrail check: decision='{guard_data.get('decision')}'")
             if guard_data.get("decision") == "blocked":
+                logger.warning(f"Immediate command blocked by guardrails: categories={guard_data.get('categories')}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
@@ -388,11 +444,14 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                 )
 
         # Decision agent resolution
+        logger.debug("Dispatching immediate command to LangGraph Decision Agent")
         decision_resp = await client.post(f"{DECISION_AGENT_URL}/resolve", json={"plan": plan_data})
         if decision_resp.status_code != 200:
+            logger.error(f"Decision agent failed for immediate command: status={decision_resp.status_code}")
             raise HTTPException(status_code=decision_resp.status_code, detail="Failed to process command")
 
         decision_data = decision_resp.json()
+        logger.info(f"Decision agent immediate command outcome: id={decision_data.get('automation_id')}, status={decision_data.get('status')}")
         if decision_data.get("status") == "draft":
             return {
                 "id": decision_data["automation_id"],
@@ -403,6 +462,7 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                 "plan": plan_data
             }
 
+        logger.info(f"Immediate command executed successfully: id={decision_data['automation_id']}")
         return {
             "id": decision_data["automation_id"],
             "status": "executed",
@@ -414,6 +474,7 @@ async def execute_immediate_command(req: CreateAutomationRequest):
 @app.post("/api/v1/automations/{automation_id}/resume")
 async def resume_automation(automation_id: str, req: ResumeAutomationRequest):
     """Resume an ambiguous automation or confirm destructive action currently in draft status"""
+    logger.info(f"Resume request for automation {automation_id}: user_response={req.user_response}", extra={"extra_data": {"automation_id": automation_id, "user_response": req.user_response}})
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.post(
@@ -421,12 +482,15 @@ async def resume_automation(automation_id: str, req: ResumeAutomationRequest):
                 json={"automation_id": automation_id, "user_response": req.user_response}
             )
         except Exception as e:
+            logger.error(f"Failed to communicate with decision agent on resume: {e}", exc_info=True)
             raise HTTPException(status_code=503, detail=f"Failed to communicate with decision agent: {e}")
 
         if resp.status_code != 200:
+            logger.error(f"Decision agent resume failed: status={resp.status_code}, response={resp.text}")
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
         data = resp.json()
+        logger.info(f"Automation {automation_id} successfully resumed with status '{data.get('status', 'active')}'")
         return {
             "id": automation_id,
             "status": data.get("status", "active"),

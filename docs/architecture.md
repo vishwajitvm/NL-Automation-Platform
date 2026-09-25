@@ -140,3 +140,22 @@ sequenceDiagram
     E->>U: notify (optional)
 ```
 **mermaid.ink:** [Render Link](https://mermaid.ink/img/c2VxdWVuY2VEaWFncmFtCiAgICBwYXJ0aWNpcGFudCBUIGFzIFRyaWdnZXIgRW5naW5lCiAgICBwYXJ0aWNpcGFudCBRIGFzIFJlZGlzIFF1ZXVlCiAgICBwYXJ0aWNpcGFudCBFIGFzIEV4ZWN1dGlvbiBTYW5kYm94CiAgICBwYXJ0aWNpcGFudCBSIGFzIEFjdGlvbiBSZWdpc3RyeSAoTUNQKQogICAgcGFydGljaXBhbnQgREIgYXMgUG9zdGdyZVNRTAogICAgcGFydGljaXBhbnQgVSBhcyBVc2VyIChub3RpZmljYXRpb24pCgogICAgbG9vcCBldmVyeSBwb2xsIGludGVydmFsCiAgICAgICAgVC0+PlQ6IGNoZWNrIGNvbmRpdGlvbiAoZS5nLiBiaW4gc2l6ZSA+PSA4MCUpCiAgICBlbmQKICAgIFQtPj5ROiBlbnF1ZXVlIGpvYiAoYXV0b21hdGlvbl9pZCkKICAgIFEtPj5FOiBkaXNwYXRjaCBqb2IKICAgIEUtPj5SOiBpbnZva2UgcmVnaXN0ZXJlZCBhY3Rpb24gb25seQogICAgUi0tPj5FOiByZXN1bHQgKHN1Y2Nlc3MvZmFpbCkKICAgIEUtPj5EQjogd3JpdGUgYXVkaXRfbG9nIGVudHJ5CiAgICBFLT4+VTogbm90aWZ5IChvcHRpb25hbCk=)
+
+---
+
+## 4. Observability & Logging Architecture (TraceNest)
+
+The platform embeds **TraceNest** (`tracenest>=0.1.18`) as its platform-wide unified logging and observability SDK across all microservices and FastAPI applications.
+
+### Architecture Highlights:
+1. **Centralized Web UI at `http://localhost:8080/tracenest`**:
+   - The API Gateway mounts `tracenest.ui.router.router` directly at `/tracenest/` (with a friendly 307 redirect from `/tracenest`).
+   - Clicking **"TraceNest Logs"** in the Next.js header navigates directly to the live dashboard.
+2. **Multi-Service Log Aggregation**:
+   - Service log directories (`intent-parser`, `guardrail`, `decision-agent`, `trigger-engine`, `execution-sandbox`) are mounted into the API Gateway container under `/app/TraceNestLogs_services/<service>/`.
+   - A resilient daemon thread automatically symlinks individual daily logs into `/app/TraceNestLogs/{service}_{filename}`, allowing the TraceNest UI dropdown to seamlessly switch between all 6 microservices in real time.
+3. **Comprehensive Log Level Support**:
+   - Custom `TRACE` level (level 5) registered dynamically alongside `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`.
+   - Dynamic enrichment includes service names, function names, source file line numbers, thread/process IDs, execution durations (`duration_ms`), and custom metadata dictionaries.
+4. **Secret Redaction**:
+   - TraceNest logs are strictly filtered via `shared/redaction.py` to strip API keys, Bearer tokens, passwords, and sensitive system parameters before persisting to disk.

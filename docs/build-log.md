@@ -391,4 +391,41 @@
 - [x] `docs/security-guardrails.md` reflects all Phase 9 additions.
 - [x] 73/73 automated tests passing platform-wide with 0 regressions.
 
+---
+
+## Phase 10 — TraceNest Logging SDK & Platform Observability Complete
+
+**Date:** 2026-09-26  
+**Status:** COMPLETE  
+
+### Summary of Work Done
+1. **TraceNest Logging SDK Integration (`shared/logging_config.py`)**:
+   - Installed `tracenest>=0.1.18` across all microservice Docker containers.
+   - Built `TraceNestLoggingHandler(logging.Handler)` routing standard library Python `logging` directly into `tracenest.logger.log` with structured metadata (service name, module, function name, line number, thread, process, and dynamic extras).
+   - Injected custom `TRACE` level (level 5) dynamically into `tracenest.core.config.LOG_LEVELS` and Python `logging`, supporting `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+   - Root logger configured at `DEBUG` level across all containers to guarantee granular visibility.
+2. **Observability UI & Dashboard Route (`http://localhost:8080/tracenest`)**:
+   - Mounted `tracenest.ui.router.router` directly at `/tracenest/` on the API Gateway and internal FastAPI services.
+   - Defined `@app.get("/tracenest")` returning a 307 redirect to `/tracenest/` ensuring seamless relative asset resolution (`styles.css`, `app.js`).
+   - Added direct navigation button **"TraceNest Logs"** in the Next.js frontend navbar linking to `${apiUrl}/tracenest`.
+3. **Multi-Service Log Aggregation**:
+   - Mounted shared log volumes from `intent-parser`, `guardrail`, `decision-agent`, `trigger-engine`, and `execution-sandbox` into `/app/TraceNestLogs_services/<service>` on `nl-api-gateway`.
+   - Built background daemon thread `_start_log_symlink_aggregator` linking service daily logs into `/app/TraceNestLogs/{service}_{filename}`.
+   - TraceNest UI dropdown dynamically exposes logs across all 6 microservices in a single unified interface.
+4. **Resilience & Bug Fixes Discovered via TraceNest**:
+   - Identified Groq deprecation of `meta-llama/llama-guard-4-12b`; upgraded to `openai/gpt-oss-safeguard-20b` with multi-tier fallback.
+   - Fixed indentation block bug in `services/guardrail/app/classifier.py`.
+   - Wrapped null safe accessors for non-parseable action plans in `services/api-gateway/app/main.py`.
+5. **Quality Assurance**:
+   - 76/76 unit and integration tests passing platform-wide (including 23/23 on host-agent and 53/53 across all Docker containers).
+
+### Acceptance Criteria Checklist
+- [x] TraceNest installed on latest version (`0.1.18`) across all services.
+- [x] Route `http://localhost:8080/tracenest` loads full TraceNest dashboard with 307 redirect to `/tracenest/`.
+- [x] All 6 backend services stream logs to TraceNest (`intent-parser`, `guardrail`, `decision-agent`, `trigger-engine`, `execution-sandbox`, `api-gateway`).
+- [x] Full spectrum of log levels captured: `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+- [x] Rich metadata dynamically attached (service, module, line, func, thread, process, duration_ms, request info).
+- [x] Automatic secret redaction prevents API keys or passwords from appearing in log entries.
+- [x] 76/76 automated tests passing with 0 regressions.
+
 

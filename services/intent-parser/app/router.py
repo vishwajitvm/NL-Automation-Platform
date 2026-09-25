@@ -54,31 +54,34 @@ AUTOMATION_TRIGGERS = [
 
 
 async def check_default_llama_guard(text: str, api_key: str) -> Optional[Dict[str, str]]:
-    """Evaluates raw_text against default Groq Llama Guard 4 hazard taxonomy."""
+    """Evaluates raw_text against default Groq safeguard hazard taxonomy."""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "meta-llama/llama-guard-4-12b",
-        "messages": [
-            {"role": "user", "content": text}
-        ],
-        "temperature": 0.0
-    }
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                if content.lower().startswith("unsafe"):
-                    # content often has 'unsafe\nS1' or similar
-                    lines = content.splitlines()
-                    category = lines[1] if len(lines) > 1 else "content_hazard"
-                    return {"category": category, "reason": "Violated Llama Guard hazard taxonomy"}
-            elif resp.status_code >= 500:
-                logger.warning(f"Groq returned 5xx for Llama Guard check: {resp.status_code}")
-    except Exception as e:
-        logger.warning(f"Error querying Groq Llama Guard: {e}")
+    models = ["openai/gpt-oss-safeguard-20b", "meta-llama/llama-guard-4-12b", "openai/gpt-oss-20b"]
+
+    for model_name in models:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "user", "content": text}
+            ],
+            "temperature": 0.0
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if content.lower().startswith("unsafe"):
+                        lines = content.splitlines()
+                        category = lines[1] if len(lines) > 1 else "content_hazard"
+                        return {"category": category, "reason": "Violated safeguard hazard taxonomy"}
+                    return None
+                elif resp.status_code >= 500:
+                    logger.warning(f"Groq returned 5xx for safeguard check: {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Error querying Groq safeguard: {e}")
     return None
 
 

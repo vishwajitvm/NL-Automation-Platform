@@ -3,9 +3,10 @@
 > **Turn plain English sentences into safe, dependable computer automations — with zero coding and zero guesswork.**
 
 [![Docker Powered](https://img.shields.io/badge/docker-ready-blue?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Tests Passing](https://img.shields.io/badge/tests-35%2F35%20passing-brightgreen)](file:///c:/python/NL-Automation%20Platform/docs/build-log.md)
+[![Tests Passing](https://img.shields.io/badge/tests-76%2F76%20passing-brightgreen)](file:///c:/python/NL-Automation%20Platform/docs/build-log.md)
 [![Free Tier Only](https://img.shields.io/badge/cost-$0%20free--tier-purple)]()
 [![Security Shield](https://img.shields.io/badge/guardrails-Llama%20Guard%204-red)]()
+[![TraceNest Observability](https://img.shields.io/badge/TraceNest-v0.1.18%20enabled-blueviolet)](http://localhost:8080/tracenest)
 
 ---
 
@@ -258,20 +259,31 @@ When you open **[http://localhost:3001](http://localhost:3001)**, you will see t
 * View timestamps and raw details for every event: `guardrail_approved`, `trigger_registered`, `trigger_fired`, `action_executed`, `provider_failover`, and `ambiguity_resolved`.
 * Turn on **Live Poll (3s)** to watch events stream into the UI in real time!
 
+### 4. 🔍 TraceNest Live Observability Dashboard
+* **Instant Log Inspection (`http://localhost:8080/tracenest`):**
+  - Live, color-coded stream of all microservice operations (`TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`).
+  - Dropdown selector allows instant switching between all 6 backend services (`api-gateway`, `intent-parser`, `guardrail`, `decision-agent`, `trigger-engine`, `execution-sandbox`).
+  - Detailed metadata on every event: service name, function, line number, duration (`duration_ms`), and execution context.
+  - Automatic secret redaction scrubs passwords, tokens, and API keys before they hit the disk.
+  - Direct 1-click access via the **"TraceNest Logs"** button in the Web UI navigation bar.
+
 ---
 
 ## 🔒 Security: How We Keep Your Computer Safe
 
-1. **Zero Arbitrary Code Execution:** The system **never** generates Python code or terminal commands to run on the fly. It can only call tools from a strict, hard-coded registry:
-   - `send_email`
-   - `send_webhook`
-   - `write_log_notification`
-   - `run_http_healthcheck`
-   - `empty_recycle_bin`
-2. **Container Sandbox Boundary:** All actions run inside an isolated Linux container. It cannot touch or damage your host operating system files.
-3. **Fail-Closed Policy:** If Groq or any safety API goes offline, the platform **blocks the request**. It never fails open.
-4. **Idempotency Guarantee:** If a trigger fires twice accidentally within the same minute, the database checks the execution log and skips the duplicate so side effects never happen twice.
-5. **Cooldown Windows:** Threshold automations have a default 5-minute cooldown to prevent notification storms or trigger flapping.
+1. **Zero Arbitrary Code Execution:** The system **never** generates Python code or shell commands on the fly. It can only call tools from a strict, hard-coded registry:
+   - **Sandbox Actions**: `send_email`, `send_webhook`, `write_log_notification`, `run_http_healthcheck`.
+   - **Host Agent Actions**: `check_disk_usage`, `list_drives`, `clean_temp_and_cache`, `empty_trash`, `preview_delete_path`, `delete_path`.
+   - **Isolated Browser Actions**: `browser_open_url`, `browser_click_element`, `browser_fill_input`, `browser_extract_text`, `browser_close`.
+2. **Hard Filesystem Denylist:** Any attempt to target drive roots (`C:\`, `/`), Windows directories (`C:\Windows`), or system folders triggers an immediate refusal without even prompting.
+3. **Multi-Step SweetAlert2 Confirmation:** Destructive operations (like `delete_path`) require passing three separate human confirmations:
+   - *Step 1:* Dry-run summary of total files and bytes to be deleted.
+   - *Step 2:* Explicitly typing the target folder path to prevent accidental clicks.
+   - *Step 3:* A mandatory 3-second disabled countdown with a vivid red warning banner before the confirm button enables.
+4. **Isolated Sandboxed Browser Profile:** Managed browser automation operates strictly in a dedicated Playwright Chromium profile (`~/.nl-automation/browser-profile`). It never touches your personal Chrome/Firefox profiles, bookmarks, or banking cookies.
+5. **Fail-Closed Policy:** If Groq, OpenAI Safeguard, or any safety API is unreachable, the platform **blocks the request**. It never fails open.
+6. **Idempotency Guarantee:** If a trigger fires twice accidentally within the same minute, the database checks the execution log and skips the duplicate so side effects never happen twice.
+7. **Cooldown Windows:** Threshold automations have a default 5-minute cooldown to prevent notification storms or trigger flapping.
 
 ---
 

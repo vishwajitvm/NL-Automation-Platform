@@ -62,6 +62,11 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - api_gateway_logs:/app/TraceNestLogs
+      - intent_parser_logs:/app/TraceNestLogs_services/intent-parser:ro
+      - guardrail_logs:/app/TraceNestLogs_services/guardrail:ro
+      - decision_agent_logs:/app/TraceNestLogs_services/decision-agent:ro
+      - trigger_engine_logs:/app/TraceNestLogs_services/trigger-engine:ro
+      - execution_sandbox_logs:/app/TraceNestLogs_services/execution-sandbox:ro
     networks:
       - nl-network
     depends_on:

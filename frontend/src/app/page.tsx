@@ -468,6 +468,17 @@ export default function Home() {
                 <Laptop className="w-3.5 h-3.5" />
                 Host Agent
               </button>
+              <a
+                href={`${apiUrl}/tracenest`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 text-amber-400 hover:text-amber-300 bg-amber-950/40 hover:bg-amber-900/50 border border-amber-800/50 shadow-sm"
+                title="Open TraceNest Observability Dashboard"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                TraceNest Logs
+                <ExternalLink className="w-3 h-3 ml-0.5 opacity-70" />
+              </a>
             </div>
           </div>
         </div>

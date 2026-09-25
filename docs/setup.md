@@ -49,6 +49,7 @@ docker compose logs -f api-gateway
 |---|---|---|
 | **Frontend** | `http://frontend:3000` | `http://localhost:3001` (or `$FRONTEND_PORT`) |
 | **API Gateway** | `http://api-gateway:8000` | `http://localhost:8080` (or `$API_GATEWAY_PORT`) |
+| **TraceNest Logs Dashboard** | `http://api-gateway:8000/tracenest/` | `http://localhost:8080/tracenest` |
 | **PostgreSQL** | `postgres:5432` | Internal only |
 | **Redis** | `redis:6379` | Internal only |
 | **Intent Parser** | `intent-parser:8000` | Internal only |
@@ -59,7 +60,19 @@ docker compose logs -f api-gateway
 
 ---
 
-## 4. Teardown
+## 4. TraceNest Observability Dashboard
+
+Access the real-time logging and observability dashboard directly in your browser:
+- **URL**: `http://localhost:8080/tracenest`
+- **Features**:
+  - Live inspection of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, and custom `TRACE` log records.
+  - Multi-service dropdown to inspect logs from `api-gateway`, `intent-parser`, `guardrail`, `decision-agent`, `trigger-engine`, and `execution-sandbox`.
+  - Secret redaction enabled by default (API keys and credentials are automatically scrubbed).
+  - Also accessible via the **"TraceNest Logs"** button in the top navigation bar of the Web UI (`http://localhost:3001`).
+
+---
+
+## 5. Teardown
 
 To stop and remove containers:
 ```bash

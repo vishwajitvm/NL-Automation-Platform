@@ -111,36 +111,44 @@ async def check_prompt_guard_groq(text: str, api_key: str) -> bool:
 
 
 async def check_llama_guard_groq(plan: AutomationPlan, api_key: str) -> ClassificationResult:
-    """Main classifier using Groq hosted Llama Guard 4 12B"""
+    """Main classifier using Groq hosted safeguard model"""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": "meta-llama/llama-guard-4-12b",
-        "messages": [
-            {"role": "system", "content": TAXONOMY_PROMPT},
-            {"role": "user", "content": f"Plan: {plan.model_dump_json()}"}
-        ],
-        "temperature": 0.0,
-        "response_format": {"type": "json_object"}
-    }
+    
+    models = ["openai/gpt-oss-safeguard-20b", "meta-llama/llama-guard-4-12b", "openai/gpt-oss-20b"]
+    data = None
+    
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code >= 500:
-            raise httpx.HTTPStatusError("Groq 5xx error", request=resp.request, response=resp)
-        if resp.status_code != 200:
-            raise httpx.HTTPStatusError(f"Groq {resp.status_code}", request=resp.request, response=resp)
-        
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-        result = json.loads(content)
-        if not result.get("safe", True):
-            cats = result.get("categories", ["unsafe_plan"])
-            return ClassificationResult(
-                decision="blocked",
-                reason=result.get("reason", "Violation of safety taxonomy"),
-                categories=cats
-            )
-        return ClassificationResult(decision="approved", reason=None, categories=[])
+        for model_name in models:
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": TAXONOMY_PROMPT},
+                    {"role": "user", "content": f"Plan: {plan.model_dump_json()}"}
+                ],
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"}
+            }
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                break
+            elif resp.status_code >= 500:
+                raise httpx.HTTPStatusError("Groq 5xx error", request=resp.request, response=resp)
+
+    if not data:
+        raise httpx.HTTPStatusError("All Groq guardrail models failed", request=None, response=None)
+    
+    content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+    result = json.loads(content)
+    if not result.get("safe", True):
+        cats = result.get("categories", ["unsafe_plan"])
+        return ClassificationResult(
+            decision="blocked",
+            reason=result.get("reason", "Violation of safety taxonomy"),
+            categories=cats
+        )
+    return ClassificationResult(decision="approved", reason=None, categories=[])
 
 
 async def classify_plan(plan: AutomationPlan, force_groq_fail: bool = False) -> ClassificationResult:
