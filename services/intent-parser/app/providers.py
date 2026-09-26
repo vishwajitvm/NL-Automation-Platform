@@ -212,7 +212,7 @@ class DeterministicRuleProvider(LLMProvider):
             "healthcheck", "check", "log", "alert", "run", "search", "delete", "remove", "wipe",
             "drive", "drives", "browser", "tab", "tabs", "open", "temp", "cache",
             "remind", "reminder", "stretch", "after", "minutes", "minute", "hours", "hour",
-            "device", "devices", "process", "processes", "memory", "ram", "format"
+            "device", "devices", "process", "processes", "memory", "ram", "format", "free", "space", "clear", "tell", "who", "what", "how", "where", "capital"
         }
         meaningful_count = sum(1 for w in clean_words if w in known_keywords)
 
@@ -325,7 +325,7 @@ class DeterministicRuleProvider(LLMProvider):
             else:
                 delay_sec = num
 
-            if "email" in text:
+            if "email" in text or "alert" in text or "remind" in text:
                 subject = "Reminder"
                 if "about" in text:
                     subject = "Reminder: " + text.split("about", 1)[1].strip()
@@ -412,7 +412,7 @@ class DeterministicRuleProvider(LLMProvider):
                 return schema.model_validate(res.model_dump())
 
         # Case 2: Email time-based
-        if "email" in text:
+        if "email" in text or "alert" in text or "remind" in text:
             # check day/time
             cron = "0 17 * * 5"  # default Friday 5pm
             if "friday" in text and "5pm" in text:

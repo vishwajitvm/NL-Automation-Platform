@@ -284,7 +284,7 @@ async def handle_informational_query(client: httpx.AsyncClient, raw_text: str, t
     elif act == "web_search":
         params = {"query": raw_text}
     elif act == "check_disk_usage":
-        params = {"path": "/"}
+        params = {"drive": "C:\\"}
 
     # Execute target low-risk action directly via Execution Sandbox
     try:
