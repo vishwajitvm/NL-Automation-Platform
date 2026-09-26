@@ -428,4 +428,92 @@
 - [x] Automatic secret redaction prevents API keys or passwords from appearing in log entries.
 - [x] 76/76 automated tests passing with 0 regressions.
 
+---
+
+## Phase 10 — Safety & Reliability Extensions Complete
+
+**Date:** 2026-09-26  
+**Status:** COMPLETE  
+
+### Summary of Work Done
+1. **Bugfix (§10.1): Immediate Execution vs. Threshold Defaulting**:
+   - Added explicit rule to Intent Parser prompt: *"NEVER invent a numeric threshold, time, or delay that the user did not state. If no condition is given at all, set `trigger.type = 'immediate'` — do not default to any prior example's numbers."*
+   - Few-shot example added for `"please clean my recycle bin"` → `trigger.type: "immediate"`, `action.name: "empty_trash"` (or `empty_recycle_bin`).
+   - Verified that `"please clean my recycle bin"` executes immediately and never invents an 80% threshold.
+2. **Relative Delay Triggers (§10.2)**:
+   - Added `delay = "delay"` to `TriggerType` enum in `shared/schemas/plan.py`.
+   - Migration `0004_phase10_updates.py` applied adding `delay` to PostgreSQL `trigger_type` enum.
+   - Updated `services/trigger-engine/app/time_triggers.py` to schedule one-shot APScheduler `DateTrigger(run_date=now() + delay_seconds)` that automatically deregisters after firing.
+   - Action defaulting: "remind me to X" defaults to `write_log_notification`; "email me about X" defaults to `send_email`.
+3. **Real SMTP Email Sending (§10.3)**:
+   - Implemented real SMTP delivery via standard library `smtplib` and `email.mime` in `services/execution-sandbox/app/actions/send_email.py`.
+   - Supports TLS on port 587 (configured for Gmail App Passwords or standard SMTP relays).
+   - If SMTP credentials are missing, returns an explicit failed `ActionResult` routed to dead-letter queue, preventing silent drops.
+4. **Dynamic Ethics & Legitimacy Reasoning Agent (§10.4)**:
+   - Created `services/guardrail/app/ethics_agent.py` exposing `POST /ethics-review`.
+   - Implemented written rubric prompt reasoning step-by-step across 4 pillars: harm, credential exfiltration, person-lookup legitimacy, and everyday personal computing tasks.
+   - Multi-tier model fallback: `llama-3.3-70b-versatile` → `openai/gpt-oss-120b` → `openai/gpt-oss-20b` → `gemini-2.5-flash-lite` → heuristic evaluator.
+   - All reviews immutably logged to `audit_log` (`event_type=ethics_review`). Fails closed on service unavailability.
+5. **System Diagnostics & Read-Only Actions (§10.5)**:
+   - Created `get_memory_usage.py`, `list_top_processes.py`, and `list_connected_devices.py` in Execution Sandbox and Host Agent.
+   - Host Agent implements `psutil.virtual_memory()`, top N processes sorted by CPU/RAM, and OS peripheral enumeration (Windows WMI `Win32_PnPEntity`, Linux `lsusb`, macOS `system_profiler`).
+   - Assigned risk tier `low` with zero false-positive blocks.
+6. **Fixed Credential Refusal (§10.6)**:
+   - Deterministic refusal applied across Router, Intent Parser, Guardrail, and API Gateway for all credential queries:
+     > *"I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."*
+   - Logged to `audit_log` with `event_type=content_policy_blocked, payload.category="credential_exfiltration"`.
+
+### Acceptance Criteria Checklist
+- [x] "please clean my recycle bin" → immediate execution, no 80% threshold inserted.
+- [x] "remind me to stretch after 5 minutes" → fires once at `now()+5min`, shows as UI notification.
+- [x] "email me a status update in 10 minutes" → parses as `delay` trigger with real SMTP handler.
+- [x] "what's my computer's admin password" → exact fixed refusal wording returned (§10.6).
+- [x] Novel harmful requests → denied by Dynamic Ethics Agent with audit-logged reasoning.
+- [x] "how much RAM is my Chrome using" / "list devices plugged into my PC" → answered directly via informational query lane with zero false blocks.
+
+---
+
+## Phase 11 — Consolidation: One Authoritative Safety Pipeline Order Complete
+
+**Date:** 2026-09-26  
+**Status:** COMPLETE  
+
+### Summary of Work Done
+1. **Authoritative 11-Step Pipeline Implementation (`services/api-gateway/app/main.py`)**:
+   - Consolidated all safety, reasoning, and routing checks into the single authoritative sequence defined in §11.1:
+     - **Step 1: Request Router** — Screens raw text via default hazard taxonomy.
+     - **Step 2: Intent Parser** — Multi-model parsing; rejects compounds (422) and unparseable (400); logs `parsed`.
+     - **Step 3: Registry Check** — Rejects any action not in `ALLOWED_ACTIONS`.
+     - **Step 4: Hard Denylist** — Deterministically rejects forbidden paths (`delete_path` on drive roots or core system folders) **BEFORE any AI calls**, provably short-circuiting.
+     - **Step 5: Prompt Guard Pre-Filter** — Screens raw text for injection/jailbreak attacks.
+     - **Step 6: Llama Guard 4 Custom Taxonomy** — Evaluates structured plan against custom hazard categories; special-cases credential exfiltration fixed wording.
+     - **Step 7: Dynamic Ethics Agent** — Evaluates plan against generalized rubric reasoning judge.
+     - **Step 8: Risk Tier Lookup** — Deterministic assignment (`low`, `medium`, `high`).
+     - **Step 9: Confirmation Flow** — SweetAlert2 3-stage modal flow for medium/high risk plans.
+     - **Step 10: Decision Agent Ambiguity Resolution** — LangGraph interrupt/checkpoint loop.
+     - **Step 11: Finalize & Dispatch / Persist** — APScheduler registration or Execution Sandbox dispatch.
+2. **Informational Query & Disallowed Content Fast Lanes**:
+   - `informational_query`: Executes Step 1 (Router) → Step 7 (Ethics Agent) → Execution Sandbox directly. Returns diagnostic JSON payload to UI.
+   - `disallowed_content`: Halts at Step 1 with immediate refusal.
+3. **Consolidated Audit Event Ordering (§11.2)**:
+   - Guaranteed chronological audit sequence: `parsed → guardrail_approved / guardrail_blocked → ethics_review → ambiguity_asked / resolved → destructive_action_confirmation → trigger_registered → trigger_fired → action_executed / action_failed`.
+4. **Lifecycle Architecture Diagram (`docs/diagrams/full-flow-v2.mmd`) (§11.3)**:
+   - Created authoritative Mermaid diagram illustrating the complete 11-step lifecycle, all 3 routing lanes, and dispatch boundaries.
+5. **Quality Assurance**:
+   - 101/101 automated tests passing across the entire platform:
+     - `api-gateway`: 16/16 passed
+     - `intent-parser`: 23/23 passed
+     - `guardrail`: 10/10 passed
+     - `decision-agent`: 4/4 passed
+     - `trigger-engine`: 4/4 passed
+     - `execution-sandbox`: 18/18 passed
+     - `host-agent`: 26/26 passed
+
+### Acceptance Criteria Checklist
+- [x] Real request execution confirms all 11 steps execute in the exact order in §11.1.
+- [x] Credential-exfiltration special-case wording is verified distinct from generic guardrail-blocked messages.
+- [x] Hard denylist violation provably short-circuits at Step 4 before generating any Groq or Gemini AI calls for Steps 5–7.
+- [x] Authoritative diagram `docs/diagrams/full-flow-v2.mmd` created and up to date.
+- [x] 101/101 platform tests passing with 0 regressions.
+
 

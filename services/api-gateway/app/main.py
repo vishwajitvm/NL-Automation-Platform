@@ -15,6 +15,7 @@ from .db import (
     get_automation_by_id,
     archive_automation,
     get_audit_logs,
+    log_audit_event,
     create_host_agent_token,
     register_host_agent,
     record_host_agent_metric,
@@ -22,6 +23,7 @@ from .db import (
     complete_host_agent_job,
     list_host_agents,
 )
+import uuid
 
 logger = logging.getLogger("api-gateway")
 
@@ -41,6 +43,30 @@ INTENT_PARSER_URL = os.getenv("INTENT_PARSER_URL", "http://intent-parser:8000")
 GUARDRAIL_URL = os.getenv("GUARDRAIL_URL", "http://guardrail:8000")
 DECISION_AGENT_URL = os.getenv("DECISION_AGENT_URL", "http://decision-agent:8000")
 TRIGGER_ENGINE_URL = os.getenv("TRIGGER_ENGINE_URL", "http://trigger-engine:8000")
+EXECUTION_SANDBOX_URL = os.getenv("EXECUTION_SANDBOX_URL", "http://execution-sandbox:8000")
+
+ALLOWED_ACTIONS = {
+    "send_email",
+    "send_webhook",
+    "write_log_notification",
+    "run_http_healthcheck",
+    "empty_trash",
+    "empty_recycle_bin",
+    "web_search",
+    "check_disk_usage",
+    "list_drives",
+    "get_memory_usage",
+    "list_top_processes",
+    "list_connected_devices",
+    "clean_temp_and_cache",
+    "delete_path",
+    "browser_open_url",
+    "browser_list_open_tabs",
+    "browser_close_tab",
+    "browser_clear_managed_cache",
+}
+
+FIXED_CREDENTIAL_REFUSAL = "I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."
 
 
 class CreateAutomationRequest(BaseModel):
@@ -198,6 +224,95 @@ def get_all_audit(limit: int = 50):
     return {"audit_logs": logs}
 
 
+async def handle_informational_query(client: httpx.AsyncClient, raw_text: str, target_action: Optional[str] = None) -> Dict[str, Any]:
+    # Step 7: Dynamic Ethics Agent review
+    try:
+        ethics_resp = await client.post(
+            f"{GUARDRAIL_URL}/ethics-review",
+            json={"raw_text": raw_text, "lane": "informational_query", "structured_plan": None}
+        )
+    except Exception as e:
+        logger.error(f"Ethics review service connection error: {e}")
+        raise HTTPException(status_code=503, detail="Dynamic ethics review service unavailable (fail-closed)")
+
+    if ethics_resp.status_code != 200:
+        logger.error(f"Ethics review service returned HTTP {ethics_resp.status_code}")
+        raise HTTPException(status_code=503, detail="Dynamic ethics review service unavailable (fail-closed)")
+
+    ethics_data = ethics_resp.json()
+    if ethics_data.get("verdict") == "deny":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "ETHICS_DENIED",
+                "message": f"Action declined by ethics review: {ethics_data.get('reasoning')}",
+                "reasoning": ethics_data.get("reasoning"),
+            }
+        )
+
+    if ethics_data.get("verdict") == "needs_clarification":
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "draft",
+            "lane": "informational_query",
+            "clarification_prompt": ethics_data.get("clarifying_question", "Could you clarify the purpose of this request?"),
+            "reasoning": ethics_data.get("reasoning"),
+        }
+
+    # Determine action & parameters
+    act = target_action
+    lower = raw_text.lower()
+    if not act or act == "none":
+        if any(w in lower for w in ("process", "processes", "taskmanager", "task manager", "consuming")):
+            act = "list_top_processes"
+        elif any(w in lower for w in ("ram", "memory", "usage", "consumption")):
+            act = "get_memory_usage"
+        elif any(w in lower for w in ("device", "devices", "usb", "mouse", "keyboard", "connected", "external")):
+            act = "list_connected_devices"
+        elif any(w in lower for w in ("drive", "drives", "volume")):
+            act = "list_drives"
+        elif "disk" in lower:
+            act = "check_disk_usage"
+        else:
+            act = "web_search"
+
+    params: Dict[str, Any] = {}
+    if act == "list_top_processes":
+        sort_by = "memory" if ("ram" in lower or "memory" in lower) else "cpu"
+        params = {"sort_by": sort_by, "limit": 10}
+    elif act == "web_search":
+        params = {"query": raw_text}
+    elif act == "check_disk_usage":
+        params = {"path": "/"}
+
+    # Execute target low-risk action directly via Execution Sandbox
+    try:
+        exec_resp = await client.post(
+            f"{EXECUTION_SANDBOX_URL}/execute",
+            json={"action_name": act, "params": params}
+        )
+        if exec_resp.status_code != 200:
+            logger.error(f"Execution sandbox returned status {exec_resp.status_code}: {exec_resp.text}")
+            raise HTTPException(status_code=exec_resp.status_code, detail=f"Execution failed: {exec_resp.text}")
+        exec_data = exec_resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Execution sandbox invocation error: {e}")
+        raise HTTPException(status_code=503, detail=f"Execution sandbox unavailable: {e}")
+
+    result_payload = exec_data.get("data") if "data" in exec_data else exec_data
+    return {
+        "id": str(uuid.uuid4()),
+        "status": "executed",
+        "lane": "informational_query",
+        "action": act,
+        "result": result_payload,
+        "raw_text": raw_text,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
 @app.post("/api/v1/automations", status_code=status.HTTP_201_CREATED)
 async def create_automation(req: CreateAutomationRequest):
     raw_text = req.text.strip()
@@ -208,7 +323,7 @@ async def create_automation(req: CreateAutomationRequest):
     logger.info(f"Processing automation request: '{raw_text}' (tz={req.timezone})", extra={"extra_data": {"raw_text": raw_text, "tz": req.timezone}})
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # 0. Request Router Pre-Gate
+        # Step 1. Request Router Pre-Gate
         try:
             logger.debug(f"Querying Request Router for text: '{raw_text}'")
             route_resp = await client.post(
@@ -218,22 +333,36 @@ async def create_automation(req: CreateAutomationRequest):
             if route_resp.status_code == 200:
                 route_data = route_resp.json()
                 logger.info(f"Request Router classification: lane='{route_data.get('lane')}' (reason='{route_data.get('reason')}')")
+                
+                # Disallowed content lane
                 if route_data.get("lane") == "disallowed_content":
                     logger.warning(f"Request blocked by content policy: reason={route_data.get('reason')}")
+                    is_cred = "credential" in str(route_data.get("reason", "")).lower() or any(
+                        w in raw_text.lower() for w in ("password", "credential", "wifi password", "admin password")
+                    )
+                    refusal = FIXED_CREDENTIAL_REFUSAL if is_cred else route_data.get("refusal", "Request violates content policy.")
+                    cat = "credential_exfiltration" if is_cred else "content_policy"
+                    log_audit_event("content_policy_blocked", {"category": cat, "reason": refusal, "raw_text": raw_text})
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
                             "error": "content_policy_blocked",
-                            "message": route_data.get("refusal", "Request violates content policy."),
-                            "reason": route_data.get("reason"),
+                            "message": refusal,
+                            "reason": cat,
                         }
                     )
+                
+                # Informational query lane
+                if route_data.get("lane") == "informational_query":
+                    logger.info(f"Routing to informational query handler: target_action={route_data.get('target_action')}")
+                    return await handle_informational_query(client, raw_text, route_data.get("target_action"))
+
         except HTTPException:
             raise
         except Exception as e:
             logger.warning(f"Request router note: {e}")
 
-        # 1. Intent Parser Call
+        # Step 2. Intent Parser Call
         try:
             logger.debug("Dispatching request to Intent Parser")
             parse_resp = await client.post(
@@ -257,6 +386,10 @@ async def create_automation(req: CreateAutomationRequest):
             raise HTTPException(status_code=parse_resp.status_code, detail="Failed to parse automation request")
 
         plan_data = parse_resp.json()
+        if not plan_data.get("parseable", True):
+            logger.warning(f"Unparseable plan rejected for text: '{raw_text}'")
+            raise HTTPException(status_code=400, detail="I couldn't understand that.")
+
         action_name = (plan_data.get("action") or {}).get("name")
         trigger_type = (plan_data.get("trigger") or {}).get("type")
         logger.debug(
@@ -264,9 +397,23 @@ async def create_automation(req: CreateAutomationRequest):
             extra={"extra_data": {"plan": plan_data}}
         )
 
-        # Hard denylist check before confirmation modals are even offered
+        # Log parsed audit event per Section 11.2 ordering
+        log_audit_event("parsed", {"plan": plan_data, "raw_text": raw_text})
+
+        # Step 3. Action Registry Check
+        if not action_name or action_name not in ALLOWED_ACTIONS:
+            logger.warning(f"Action '{action_name}' rejected: not in registered action allowlist")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "UNREGISTERED_ACTION",
+                    "message": f"Action '{action_name}' is not in registered action allowlist."
+                }
+            )
+
+        # Step 4. Hard Denylist Check (Deterministic - Short-Circuits BEFORE AI guardrail calls)
         action_obj = plan_data.get("action") or {}
-        if action_obj.get("name") == "delete_path":
+        if action_name == "delete_path":
             target_path = action_obj.get("params", {}).get("path", "")
             if is_forbidden(target_path):
                 logger.warning(f"Hard denylist violation intercepted: '{target_path}'")
@@ -283,7 +430,7 @@ async def create_automation(req: CreateAutomationRequest):
             if "timezone" not in plan_data["trigger"]["params"]:
                 plan_data["trigger"]["params"]["timezone"] = req.timezone
 
-        # 2. Guardrail Safety Check
+        # Step 5 & 6. Guardrail Safety Check (Prompt Guard + Llama Guard 4)
         try:
             logger.debug("Dispatching plan to Security Guardrail Pre-Gate")
             guard_resp = await client.post(
@@ -301,34 +448,69 @@ async def create_automation(req: CreateAutomationRequest):
         guard_data = guard_resp.json()
         logger.info(f"Guardrail disposition: decision='{guard_data.get('decision')}', categories={guard_data.get('categories')}")
         if guard_data.get("decision") == "blocked":
-            logger.warning(f"Plan blocked by guardrails: categories={guard_data.get('categories')}, reason={guard_data.get('reason')}")
+            cats = guard_data.get("categories", [])
+            logger.warning(f"Plan blocked by guardrails: categories={cats}, reason={guard_data.get('reason')}")
+            if "credential_exfiltration" in cats:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "content_policy_blocked",
+                        "message": FIXED_CREDENTIAL_REFUSAL,
+                        "reason": "credential_exfiltration",
+                        "categories": ["credential_exfiltration"]
+                    }
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error": "GUARDRAIL_BLOCKED",
                     "reason": guard_data.get("reason", "Violated security guardrails policy."),
-                    "categories": guard_data.get("categories", []),
+                    "categories": cats,
                     "suggested_alternative": "You can clean temporary files and cache or monitor disk usage instead."
                 }
             )
 
-        if not plan_data.get("parseable", True):
-            logger.warning(f"Unparseable plan rejected for text: '{raw_text}'")
-            raise HTTPException(status_code=400, detail="I couldn't understand that.")
+        # Step 7. Dynamic Ethics & Legitimacy Reasoning Agent (runs last among safety checks)
+        try:
+            logger.debug("Dispatching to Dynamic Ethics Agent")
+            ethics_resp = await client.post(
+                f"{GUARDRAIL_URL}/ethics-review",
+                json={
+                    "raw_text": raw_text,
+                    "lane": "automation",
+                    "structured_plan": plan_data
+                }
+            )
+        except Exception as e:
+            logger.error(f"Ethics review service connection error: {e}", exc_info=True)
+            raise HTTPException(status_code=503, detail="Dynamic ethics review service unavailable (fail-closed)")
 
-        # 3. Check for duplicate/conflicting active automation
-        existing = list_automations(status="active")
-        for item in existing:
-            sp = item.get("structured_plan", {})
-            if (
-                sp.get("trigger", {}).get("type") == plan_data.get("trigger", {}).get("type") and
-                sp.get("action", {}).get("name") == plan_data.get("action", {}).get("name") and
-                sp.get("trigger", {}).get("params") == plan_data.get("trigger", {}).get("params")
-            ):
-                logger.info(f"Identified duplicate active automation: id={item.get('id')}")
-                break
+        if ethics_resp.status_code != 200:
+            logger.error(f"Ethics review service returned HTTP {ethics_resp.status_code}")
+            raise HTTPException(status_code=503, detail="Dynamic ethics review service unavailable (fail-closed)")
 
-        # 4. Decision Agent Resolution
+        ethics_data = ethics_resp.json()
+        logger.info(f"Dynamic ethics review outcome: verdict='{ethics_data.get('verdict')}'")
+        if ethics_data.get("verdict") == "deny":
+            logger.warning(f"Automation denied by ethics review: {ethics_data.get('reasoning')}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "ETHICS_DENIED",
+                    "message": f"Action declined by ethics review: {ethics_data.get('reasoning')}",
+                    "reasoning": ethics_data.get("reasoning")
+                }
+            )
+
+        if ethics_data.get("verdict") == "needs_clarification":
+            logger.info(f"Ethics review requested clarification: '{ethics_data.get('clarifying_question')}'")
+            if not plan_data.get("ambiguities"):
+                plan_data["ambiguities"] = [{
+                    "field_path": "ethics_clarification",
+                    "question": ethics_data.get("clarifying_question", "Could you clarify the purpose of this request?")
+                }]
+
+        # Step 8, 9 & 10. Risk Tier Lookup, Confirmation Flow & Ambiguity Resolution (Decision Agent)
         try:
             logger.debug("Invoking LangGraph Decision Agent")
             decision_resp = await client.post(
@@ -359,6 +541,7 @@ async def create_automation(req: CreateAutomationRequest):
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
             }
 
+        # Step 11. Finalize -> Persist or Dispatch
         logger.info(f"Automation successfully activated: id={decision_data['automation_id']}")
         return {
             "id": decision_data["automation_id"],
@@ -379,25 +562,30 @@ async def execute_immediate_command(req: CreateAutomationRequest):
     logger.info(f"Processing immediate command: '{raw_text}'", extra={"extra_data": {"command": raw_text}})
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # Route
-        logger.debug(f"Routing immediate command: '{raw_text}'")
+        # Step 1. Request Router Pre-Gate
         route_resp = await client.post(f"{INTENT_PARSER_URL}/route", json={"raw_text": raw_text})
         if route_resp.status_code == 200:
             route_data = route_resp.json()
             logger.info(f"Immediate command lane: '{route_data.get('lane')}' (reason='{route_data.get('reason')}')")
             if route_data.get("lane") == "disallowed_content":
-                logger.warning(f"Immediate command blocked by content policy: reason={route_data.get('reason')}")
+                is_cred = "credential" in str(route_data.get("reason", "")).lower() or any(
+                    w in raw_text.lower() for w in ("password", "credential", "wifi password", "admin password")
+                )
+                refusal = FIXED_CREDENTIAL_REFUSAL if is_cred else route_data.get("refusal", "Request violates content policy.")
+                cat = "credential_exfiltration" if is_cred else "content_policy"
+                log_audit_event("content_policy_blocked", {"category": cat, "reason": refusal, "raw_text": raw_text})
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
                         "error": "content_policy_blocked",
-                        "message": route_data.get("refusal", "Request violates content policy."),
-                        "reason": route_data.get("reason"),
+                        "message": refusal,
+                        "reason": cat,
                     }
                 )
+            if route_data.get("lane") == "informational_query":
+                return await handle_informational_query(client, raw_text, route_data.get("target_action"))
 
-        # Parse
-        logger.debug("Parsing immediate command into structured plan")
+        # Step 2. Intent Parser Call
         parse_resp = await client.post(f"{INTENT_PARSER_URL}/parse", json={"raw_text": raw_text})
         if parse_resp.status_code != 200:
             logger.error(f"Failed to parse immediate command: status={parse_resp.status_code}")
@@ -410,10 +598,22 @@ async def execute_immediate_command(req: CreateAutomationRequest):
 
         # Ensure immediate trigger
         plan_data["trigger"] = {"type": "immediate", "params": {}}
+        log_audit_event("parsed", {"plan": plan_data, "raw_text": raw_text})
 
-        # Hard denylist check before anything else
+        # Step 3. Action Registry Check
         action_obj = plan_data.get("action") or {}
-        if action_obj.get("name") == "delete_path":
+        action_name = action_obj.get("name")
+        if not action_name or action_name not in ALLOWED_ACTIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "UNREGISTERED_ACTION",
+                    "message": f"Action '{action_name}' is not in registered action allowlist."
+                }
+            )
+
+        # Step 4. Hard Denylist Check (Deterministic - Short-Circuits BEFORE AI calls)
+        if action_name == "delete_path":
             target_path = action_obj.get("params", {}).get("path", "")
             if is_forbidden(target_path):
                 logger.warning(f"Immediate command hard denylist violation: '{target_path}'")
@@ -426,32 +626,67 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                     }
                 )
 
-        # Guardrail check
-        logger.debug("Executing Guardrail check for immediate command")
+        # Step 5 & 6. Guardrail Check
         guard_resp = await client.post(f"{GUARDRAIL_URL}/classify", json=plan_data)
-        if guard_resp.status_code == 200:
-            guard_data = guard_resp.json()
-            logger.info(f"Immediate command guardrail check: decision='{guard_data.get('decision')}'")
-            if guard_data.get("decision") == "blocked":
-                logger.warning(f"Immediate command blocked by guardrails: categories={guard_data.get('categories')}")
+        if guard_resp.status_code != 200:
+            raise HTTPException(status_code=503, detail="Security guardrail service unavailable (fail-closed)")
+
+        guard_data = guard_resp.json()
+        if guard_data.get("decision") == "blocked":
+            cats = guard_data.get("categories", [])
+            if "credential_exfiltration" in cats:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
-                        "error": "GUARDRAIL_BLOCKED",
-                        "reason": guard_data.get("reason", "Violated security guardrails policy."),
-                        "categories": guard_data.get("categories", [])
+                        "error": "content_policy_blocked",
+                        "message": FIXED_CREDENTIAL_REFUSAL,
+                        "reason": "credential_exfiltration",
+                        "categories": ["credential_exfiltration"]
                     }
                 )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "GUARDRAIL_BLOCKED",
+                    "reason": guard_data.get("reason", "Violated security guardrails policy."),
+                    "categories": cats
+                }
+            )
 
-        # Decision agent resolution
-        logger.debug("Dispatching immediate command to LangGraph Decision Agent")
+        # Step 7. Dynamic Ethics Agent
+        ethics_resp = await client.post(
+            f"{GUARDRAIL_URL}/ethics-review",
+            json={"raw_text": raw_text, "lane": "automation", "structured_plan": plan_data}
+        )
+        if ethics_resp.status_code != 200:
+            raise HTTPException(status_code=503, detail="Dynamic ethics review service unavailable (fail-closed)")
+
+        ethics_data = ethics_resp.json()
+        if ethics_data.get("verdict") == "deny":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "ETHICS_DENIED",
+                    "message": f"Action declined by ethics review: {ethics_data.get('reasoning')}",
+                    "reasoning": ethics_data.get("reasoning")
+                }
+            )
+
+        if ethics_data.get("verdict") == "needs_clarification":
+            return {
+                "id": str(uuid.uuid4()),
+                "status": "draft",
+                "clarification_prompt": ethics_data.get("clarifying_question"),
+                "reasoning": ethics_data.get("reasoning"),
+                "plan": plan_data
+            }
+
+        # Step 8, 9 & 10. Decision Agent Resolution
         decision_resp = await client.post(f"{DECISION_AGENT_URL}/resolve", json={"plan": plan_data})
         if decision_resp.status_code != 200:
-            logger.error(f"Decision agent failed for immediate command: status={decision_resp.status_code}")
             raise HTTPException(status_code=decision_resp.status_code, detail="Failed to process command")
 
         decision_data = decision_resp.json()
-        logger.info(f"Decision agent immediate command outcome: id={decision_data.get('automation_id')}, status={decision_data.get('status')}")
         if decision_data.get("status") == "draft":
             return {
                 "id": decision_data["automation_id"],
@@ -462,7 +697,6 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                 "plan": plan_data
             }
 
-        logger.info(f"Immediate command executed successfully: id={decision_data['automation_id']}")
         return {
             "id": decision_data["automation_id"],
             "status": "executed",

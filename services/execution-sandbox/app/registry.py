@@ -13,6 +13,9 @@ from .actions.check_disk_usage import CheckDiskUsageParams, check_disk_usage
 from .actions.list_drives import ListDrivesParams, list_drives
 from .actions.clean_temp_and_cache import CleanTempAndCacheParams, clean_temp_and_cache
 from .actions.delete_path import DeletePathParams, delete_path
+from .actions.get_memory_usage import EmptyParams as MemoryParams, get_memory_usage
+from .actions.list_top_processes import ListProcessesParams, list_top_processes
+from .actions.list_connected_devices import EmptyParams as DeviceParams, list_connected_devices
 from .actions.browser_actions import (
     BrowserOpenUrlParams, browser_open_url,
     BrowserListTabsParams, browser_list_open_tabs,
@@ -30,6 +33,9 @@ REGISTRY: Dict[str, Tuple[Type[BaseModel], Callable]] = {
     "web_search": (WebSearchParams, web_search),
     "check_disk_usage": (CheckDiskUsageParams, check_disk_usage),
     "list_drives": (ListDrivesParams, list_drives),
+    "get_memory_usage": (MemoryParams, get_memory_usage),
+    "list_top_processes": (ListProcessesParams, list_top_processes),
+    "list_connected_devices": (DeviceParams, list_connected_devices),
     "clean_temp_and_cache": (CleanTempAndCacheParams, clean_temp_and_cache),
     "delete_path": (DeletePathParams, delete_path),
     "browser_open_url": (BrowserOpenUrlParams, browser_open_url),
@@ -48,6 +54,9 @@ ACTION_DESCRIPTIONS: Dict[str, str] = {
     "web_search": "Controlled, rate-limited, read-only web search.",
     "check_disk_usage": "Checks capacity and free space on host drive letter or mount point.",
     "list_drives": "Lists available host logical drives and mount points.",
+    "get_memory_usage": "Checks host RAM percentage and memory metrics via psutil.",
+    "list_top_processes": "Lists host top processes sorted by memory or CPU usage.",
+    "list_connected_devices": "Enumerates connected USB and HID hardware devices on host.",
     "clean_temp_and_cache": "Cleans curated safe temporary locations and user cache folders.",
     "delete_path": "High-risk deletion of arbitrary user-specified path subject to strict denylist.",
     "browser_open_url": "Opens a URL in a separate, isolated managed browser session.",

@@ -13,10 +13,12 @@ from .db import persist_automation_record, log_audit_event, record_destructive_a
 logger = logging.getLogger("decision-agent")
 
 RISK_TIERS: Dict[str, str] = {
-    # Low
     "web_search": "low",
     "check_disk_usage": "low",
     "list_drives": "low",
+    "get_memory_usage": "low",
+    "list_top_processes": "low",
+    "list_connected_devices": "low",
     "run_http_healthcheck": "low",
     "write_log_notification": "low",
     "send_email": "low",
@@ -307,8 +309,11 @@ async def handoff_to_trigger_engine(state: DecisionState) -> Dict[str, Any]:
                     }
                 )
                 logger.info(f"Trigger engine registration response: {resp.status_code}")
+                if resp.status_code in (200, 201):
+                    log_audit_event("trigger_registered", {"trigger": final_trig, "action": plan.get("action", {})}, auto_id)
         except Exception as e:
             logger.warning(f"Could not reach trigger engine directly during handoff: {e}")
+            log_audit_event("trigger_registered", {"trigger": final_trig, "action": plan.get("action", {}), "offline_fallback": True}, auto_id)
 
     return {"status": "active"}
 

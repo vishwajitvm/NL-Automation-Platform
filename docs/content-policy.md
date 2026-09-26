@@ -39,11 +39,18 @@ When a request violates the content policy, the platform executes a deterministi
 - **General Illegal / Dangerous Goods**:
   > *"I cannot assist with requests involving the purchase, procurement, or manufacture of illegal substances or weapons."*
 
+- **Credential Exfiltration (§10.6 Fixed Wording)**:
+  > *"I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."*
+  *(Applies deterministically to any attempt to retrieve, expose, or email passwords, wifi secrets, or system keys — regardless of whether the requester claims ownership.)*
+
 - **Substance Use Support Pointer**:
   > *"I cannot help with obtaining controlled substances. If you or someone you know is seeking confidential support for substance use, you can contact SAMHSA's National Helpline at 1-800-662-4357."*
 
 - **Crisis / Self-Harm Support Pointer**:
   > *"I cannot fulfill this request. If you are experiencing thoughts of self-harm or need immediate support, please call or text 988 to reach the Suicide & Crisis Lifeline."*
+
+- **Person-Lookup Legitimacy (§10.7)**:
+  Queries naming specific private individuals undergo dynamic ethics review (§10.4). Ordinary professional or contact lookups are allowed; ambiguous searches trigger a single clarification prompt (*"Can you tell me a bit more about why you're looking this up?"*); explicit stalking, harassment, or doxxing intent is unconditionally denied.
 
 ---
 

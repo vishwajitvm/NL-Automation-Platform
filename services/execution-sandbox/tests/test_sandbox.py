@@ -162,3 +162,52 @@ async def test_dead_letter_queue_after_3_retries(monkeypatch):
         for e in audit_events
     )
 
+
+@pytest.mark.asyncio
+async def test_send_email_not_configured(monkeypatch):
+    """
+    §10.8 edge case: SMTP not configured (env vars empty) -> returns clear failed ActionResult ('email not configured')
+    """
+    monkeypatch.setenv("SMTP_HOST", "")
+    monkeypatch.setenv("SMTP_USERNAME", "")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/execute", json={
+            "action_name": "send_email",
+            "params": {"to": "test@example.com", "subject": "Test", "body": "Hello"}
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        assert "email not configured" in (data.get("data") or {}).get("error", data.get("message", "")).lower() or "smtp" in data.get("message", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_get_memory_usage_sandbox():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/execute", json={"action_name": "get_memory_usage", "params": {}})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_top_processes_sandbox():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/execute", json={"action_name": "list_top_processes", "params": {"sort_by": "memory", "limit": 5}})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_connected_devices_sandbox():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/execute", json={"action_name": "list_connected_devices", "params": {}})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+

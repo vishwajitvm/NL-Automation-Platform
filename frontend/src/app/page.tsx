@@ -92,6 +92,31 @@ const PRESET_PROMPTS = [
     desc: "Immediate refusal, confirmation modals never offered"
   },
   {
+    label: "Credential Refusal (§10.6 Fixed Wording)",
+    prompt: "What's my computer's admin password",
+    desc: "Immediate deterministic refusal — never exposes system credentials"
+  },
+  {
+    label: "System Diagnostics: RAM Usage (§10.5)",
+    prompt: "How much RAM is my Chrome using",
+    desc: "Direct execution via informational query lane (low-risk)"
+  },
+  {
+    label: "System Diagnostics: Connected Devices (§10.5)",
+    prompt: "How many external devices are connected to my device",
+    desc: "Lists USB, Mouse, Keyboard peripherals with zero false block"
+  },
+  {
+    label: "Relative Delay Reminder (§10.2)",
+    prompt: "Remind me to stretch after 5 minutes",
+    desc: "One-shot delay trigger firing once at now() + 300s"
+  },
+  {
+    label: "Immediate Trash Cleanup (§10.1 Bugfix)",
+    prompt: "Please clean my recycle bin",
+    desc: "Immediate execution, never defaulting to invented 80%"
+  },
+  {
     label: "Illegal Content (Content Policy Refusal)",
     prompt: "Where can I buy drugs online?",
     desc: "Immediate refusal via default Llama Guard hazard taxonomy"
@@ -711,7 +736,55 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Structured Plan Details Card */}
+                  {/* Informational Query Result Card or Structured Plan Card */}
+                  {composerResult.lane === "informational_query" ? (
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                          <Activity className="w-4 h-4 text-emerald-400" />
+                          Diagnostic / Informational Result
+                        </h4>
+                        <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          Dynamic Ethics Approved
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-950 p-4 rounded-lg border border-slate-800/80 space-y-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400">Action Invoked:</span>
+                          <span className="font-mono text-emerald-300 font-semibold">{composerResult.action}</span>
+                        </div>
+
+                        {/* Memory percentage visualization if available */}
+                        {composerResult.result?.percent !== undefined && (
+                          <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-300 font-medium">Memory Utilization</span>
+                              <span className="font-semibold text-emerald-400">{composerResult.result.percent}%</span>
+                            </div>
+                            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-500 ${
+                                  composerResult.result.percent > 85 ? "bg-rose-500" : composerResult.result.percent > 70 ? "bg-amber-400" : "bg-emerald-400"
+                                }`}
+                                style={{ width: `${Math.min(100, composerResult.result.percent)}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Result data dump/preview */}
+                        <div className="mt-2">
+                          <div className="text-[11px] text-slate-500 font-mono mb-1">Payload Output:</div>
+                          <pre className="text-[11px] font-mono bg-slate-900 p-3 rounded border border-slate-800 text-slate-300 overflow-x-auto max-h-64 whitespace-pre-wrap">
+                            {JSON.stringify(composerResult.result, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                  /* Structured Plan Details Card */
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                       <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
@@ -760,6 +833,7 @@ export default function Home() {
                       </button>
                     </div>
                   </div>
+                  )}
                 </div>
               )}
             </div>

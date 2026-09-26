@@ -128,3 +128,95 @@ async def test_list_and_audit_endpoints():
         resp_audit = await ac.get("/api/v1/audit")
         assert resp_audit.status_code == 200
         assert "audit_logs" in resp_audit.json()
+
+
+@pytest.mark.asyncio
+async def test_credential_refusal_fixed_wording():
+    """Credential query returns exact fixed refusal wording from §10.6"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "what's my wifi password"})
+        assert resp.status_code == 400
+        err = resp.json()["detail"]
+        assert err["message"] == "I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."
+
+
+@pytest.mark.asyncio
+async def test_hard_denylist_short_circuits_before_guardrail(monkeypatch):
+    """Step 4 hard denylist short-circuits before guardrail or ethics calls"""
+    called_guardrail = False
+
+    async def mock_post(client, url, *args, **kwargs):
+        nonlocal called_guardrail
+        if "classify" in str(url) or "ethics-review" in str(url):
+            called_guardrail = True
+        return await original_post(client, url, *args, **kwargs)
+
+    import httpx
+    original_post = httpx.AsyncClient.post
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "delete C:\\Windows"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "FORBIDDEN_DELETION"
+        # Assert guardrail & ethics were NEVER invoked!
+        assert called_guardrail is False
+
+
+@pytest.mark.asyncio
+async def test_informational_query_system_memory():
+    """Informational query executes low-risk diagnostic action with zero false block"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "what is my current memory usage"})
+        assert resp.status_code in (200, 201)
+        data = resp.json()
+        assert data.get("lane") == "informational_query"
+        assert data.get("status") == "executed"
+        assert data.get("action") in ("get_memory_usage", "list_top_processes")
+        assert "result" in data
+
+
+@pytest.mark.asyncio
+async def test_informational_query_connected_devices():
+    """Informational query lists connected devices directly"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "how many external devices are connected to my device"})
+        assert resp.status_code in (200, 201)
+        data = resp.json()
+        assert data.get("lane") == "informational_query"
+        assert data.get("status") == "executed"
+        assert data.get("action") == "list_connected_devices"
+        assert "result" in data
+
+
+@pytest.mark.asyncio
+async def test_delayed_reminder_plan():
+    """Relative delay reminders produce trigger.type = 'delay' and write_log_notification"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "remind me to stretch after 5 minutes"})
+        assert resp.status_code in (200, 201)
+        data = resp.json()
+        plan = data.get("plan", {})
+        assert plan.get("trigger", {}).get("type") == "delay"
+        assert plan.get("trigger", {}).get("params", {}).get("delay_seconds") == 300
+        assert plan.get("action", {}).get("name") == "write_log_notification"
+
+
+@pytest.mark.asyncio
+async def test_recycle_bin_immediate_never_80():
+    """'please clean my recycle bin' runs immediate, never defaulting to 80%"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/automations", json={"text": "please clean my recycle bin"})
+        assert resp.status_code in (200, 201)
+        data = resp.json()
+        plan = data.get("plan", {})
+        assert plan.get("trigger", {}).get("type") == "immediate"
+        assert plan.get("action", {}).get("name") in ("empty_trash", "empty_recycle_bin")
+        # Ensure 80% was NOT invented
+        assert plan.get("trigger", {}).get("params", {}).get("threshold") != 80

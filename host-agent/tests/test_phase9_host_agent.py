@@ -103,3 +103,34 @@ async def test_managed_browser_control(client):
     res_cache = await client.execute_browser_action("browser_clear_managed_cache", {})
     assert res_cache.success is True
     assert res_cache.details["cache_cleared"] is True
+
+
+def test_get_memory_usage(client):
+    res = client.execute_get_memory_usage({})
+    assert res.success is True
+    assert "percent" in res.details
+    assert "total_gb" in res.details
+    assert res.details["total_gb"] > 0
+    assert 0 <= res.details["percent"] <= 100
+
+
+def test_list_top_processes(client):
+    res = client.execute_list_top_processes({"sort_by": "memory", "limit": 5})
+    assert res.success is True
+    assert "processes" in res.details
+    assert len(res.details["processes"]) <= 5
+    if res.details["processes"]:
+        p = res.details["processes"][0]
+        assert "pid" in p
+        assert "name" in p
+        assert "memory_percent" in p
+
+
+def test_list_connected_devices(client):
+    res = client.execute_list_connected_devices({})
+    assert res.success is True
+    assert "devices" in res.details
+    assert len(res.details["devices"]) >= 1
+    d = res.details["devices"][0]
+    assert "type" in d
+    assert "name" in d

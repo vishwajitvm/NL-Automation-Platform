@@ -22,6 +22,27 @@ Populate the required keys in `.env`:
 - `LANGSMITH_PROJECT`: `nl-automation-platform`
 - `OPENROUTER_API_KEY`: OpenRouter fallback (optional / free models)
 
+### SMTP Email Setup (Phase 10)
+To enable real email sending via standard SMTP:
+1. Enable 2-Factor Authentication on your Gmail/Google Account.
+2. Visit [https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) and create an **App Password** for "NL-Automation Platform".
+3. Add the following to `.env`:
+   ```bash
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USE_TLS=true
+   SMTP_USERNAME=your-email@gmail.com
+   SMTP_PASSWORD=your-16-char-app-password
+   SMTP_FROM_EMAIL=your-email@gmail.com
+   DEFAULT_NOTIFY_EMAIL=your-email@gmail.com
+   ```
+If SMTP credentials are not configured, any `send_email` action returns a structured failed `ActionResult` to the dead-letter queue, ensuring zero silent drops.
+
+### Dynamic Ethics Agent Configuration (Phase 10)
+- `ETHICS_AGENT_PROVIDER=groq` (re-uses existing free `GROQ_API_KEY`, zero additional paid keys needed)
+- `ETHICS_AGENT_MODEL=llama-3.3-70b-versatile` (with multi-tier fallback to `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, and `gemini-2.5-flash-lite`)
+- `PERSON_LOOKUP_REQUIRES_JUSTIFICATION=true` (prompts for clarification on ambiguous person lookups before web search)
+
 ---
 
 ## 2. Booting the Platform

@@ -21,6 +21,9 @@ ALLOWED_ACTIONS = {
     "web_search",
     "check_disk_usage",
     "list_drives",
+    "get_memory_usage",
+    "list_top_processes",
+    "list_connected_devices",
     "clean_temp_and_cache",
     "delete_path",
     "browser_open_url",
@@ -28,6 +31,8 @@ ALLOWED_ACTIONS = {
     "browser_close_tab",
     "browser_clear_managed_cache",
 }
+
+FIXED_CREDENTIAL_REFUSAL = "I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."
 
 TAXONOMY_PROMPT = """You are a security classifier for an automated task execution system.
 Analyze the following automation plan against these custom security categories:
@@ -143,12 +148,23 @@ async def check_llama_guard_groq(plan: AutomationPlan, api_key: str) -> Classifi
     result = json.loads(content)
     if not result.get("safe", True):
         cats = result.get("categories", ["unsafe_plan"])
+        reason = FIXED_CREDENTIAL_REFUSAL if "credential_exfiltration" in cats else result.get("reason", "Violation of safety taxonomy")
         return ClassificationResult(
             decision="blocked",
-            reason=result.get("reason", "Violation of safety taxonomy"),
+            reason=reason,
             categories=cats
         )
     return ClassificationResult(decision="approved", reason=None, categories=[])
+
+
+def is_obvious_credential_exfiltration(plan: AutomationPlan) -> bool:
+    combined = f"{plan.raw_text} {json.dumps(plan.action.params if plan.action else {})}".lower()
+    patterns = [
+        r"\b(wifi|admin|root|system|computer)\s*(password|passwords|credential|credentials)\b",
+        r"\b(password|passwords|credential|credentials)\s*(of|for)\b",
+        r"\b(show|get|tell|find|send)\s+.*(password|credential)\b",
+    ]
+    return any(re.search(pat, combined) for pat in patterns)
 
 
 async def classify_plan(plan: AutomationPlan, force_groq_fail: bool = False) -> ClassificationResult:
@@ -182,6 +198,15 @@ async def classify_plan(plan: AutomationPlan, force_groq_fail: bool = False) -> 
             decision="blocked",
             reason=reason,
             categories=[destructive_cat]
+        )
+
+    # 3b. Local heuristic check for credential exfiltration (§10.6 fixed refusal)
+    if is_obvious_credential_exfiltration(plan):
+        log_audit_event("content_policy_blocked", {"category": "credential_exfiltration", "reason": FIXED_CREDENTIAL_REFUSAL})
+        return ClassificationResult(
+            decision="blocked",
+            reason=FIXED_CREDENTIAL_REFUSAL,
+            categories=["credential_exfiltration"]
         )
 
     # 4. Groq Classifier with Fail-Closed wrapper

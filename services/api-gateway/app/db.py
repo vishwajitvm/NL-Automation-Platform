@@ -120,6 +120,26 @@ def get_audit_logs(automation_id: Optional[str] = None, limit: int = 50) -> List
         return []
 
 
+def log_audit_event(event_type: str, payload: Dict[str, Any], automation_id: Optional[str] = None) -> bool:
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO audit_log (automation_id, event_type, payload)
+            VALUES (%s, %s::audit_event_type, %s);
+            """,
+            (automation_id, event_type, json.dumps(payload))
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error recording audit log in gateway: {e}")
+        return False
+
+
 import hashlib
 import uuid
 

@@ -122,3 +122,42 @@ To prevent reflex-clicking on dangerous actions, the final SweetAlert2 confirmat
    - Strictly immutable business-domain records (`guardrail_approved`, `guardrail_blocked`, `content_policy_blocked`, `trigger_fired`, `action_executed`).
    - Guarantees execution idempotency and provable accountability.
 
+---
+
+## 6. Phase 10 & 11 Consolidation: The Authoritative 11-Step Safety Pipeline
+
+### 6.1 Authoritative Execution Pipeline Order
+The platform executes safety and reasoning checks in one strict, non-negotiable sequence:
+
+#### For the `automation` lane:
+1. **Step 1: Request Router (Pre-Gate)** — Llama Guard default hazard taxonomy screens raw text. Disallowed content fails immediately.
+2. **Step 2: Intent Parser** — Multi-model parsing produces structured `AutomationPlan`. Compound requests fail with HTTP 422; unparseable requests fail with HTTP 400.
+3. **Step 3: Registry Check** — `action.name` must exist in `ALLOWED_ACTIONS`. Unregistered actions are rejected immediately.
+4. **Step 4: Hard Denylist** — Non-overridable path screening for path-taking actions (`delete_path`). Forbidden targets (drive roots, system directories) are hard-refused immediately. **Runs before any AI calls to short-circuit deterministically without consuming LLM tokens.**
+5. **Step 5: Prompt Guard Pre-Filter** — Screens raw text for prompt injections and jailbreaks using `meta-llama/llama-prompt-guard-2-86m`.
+6. **Step 6: Llama Guard 4 Custom Taxonomy** — Evaluates structured plan against custom hazard categories (`destructive_fs_op`, `credential_exfiltration`, `network_exfiltration`, `malware_behavior`). Fails closed on service unavailability.
+   - **Credential Special Case (§10.6)**: Any attempt to access or exfiltrate system secrets/passwords deterministically returns the exact fixed refusal:
+     > *"I'm sorry, but this information is not allowed to be shared — we cannot share system credentials with anyone."*
+7. **Step 7: Dynamic Ethics & Legitimacy Reasoning Agent** — Rubric-based reasoning judge catching novel harm and long-tail safety risks outside pre-enumerated lists. Emits structured verdict and reasoning stored in `audit_log` (`event_type=ethics_review`).
+8. **Step 8: Risk Tier Lookup** — Deterministic assignment (`low`, `medium`, `high`).
+9. **Step 9: Confirmation Flow** — SweetAlert2 3-stage modal flow (dry-run preview, typed path, 3-second delay) for medium/high risk actions.
+10. **Step 10: Decision Agent Ambiguity Resolution** — LangGraph interrupt/checkpoint loop pauses ambiguous requests (e.g., missing threshold) and awaits user answer.
+11. **Step 11: Finalize & Dispatch / Persist**:
+    - `immediate`: Dispatches directly to Execution Sandbox.
+    - `delay`: Registers one-shot APScheduler `DateTrigger` (now + `delay_seconds`).
+    - `time` / `threshold`: Registers persistent watcher in Trigger Engine.
+    - Container vs. Host execution dispatched based on action boundary.
+
+#### For the `informational_query` lane:
+Runs **Step 1 (Router) → Step 7 (Ethics Agent) → Execution Sandbox directly**. Steps 2–6 and 8–10 are skipped as there is no persistent automation plan or destructive blast radius.
+
+#### For the `disallowed_content` lane:
+Step 1 only. Execution halts immediately.
+
+### 6.2 Consolidated Audit Event Sequence (§11.2)
+Every automation run records immutable audit events in strictly linear chronological order:
+`parsed → guardrail_approved (or guardrail_blocked) → ethics_review → ambiguity_asked/resolved (if any) → destructive_action_confirmation (if any) → trigger_registered → trigger_fired → action_executed (or action_failed)`
+
+### 6.3 Lifecycle Architecture Diagram (§11.3)
+See [`docs/diagrams/full-flow-v2.mmd`](diagrams/full-flow-v2.mmd) for the single authoritative Mermaid diagram illustrating the complete request lifecycle across all 11 steps.
+

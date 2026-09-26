@@ -8,6 +8,7 @@ class TriggerType(str, Enum):
     threshold = "threshold"
     event = "event"
     immediate = "immediate"
+    delay = "delay"
 
 
 class Trigger(BaseModel):

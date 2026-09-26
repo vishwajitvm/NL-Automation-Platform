@@ -183,7 +183,7 @@ async def test_simulated_gemini_429_failover_to_groq(monkeypatch):
 @pytest.mark.asyncio
 async def test_clean_c_drive_resolves_to_curated_action():
     """
-    Acceptance criteria: 'clean my C drive' -> clean_temp_and_cache, never delete_path on C:\\
+    Acceptance criteria: 'clean my C drive' -> clean_temp_and_cache, never delete_path on C:\
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -193,4 +193,52 @@ async def test_clean_c_drive_resolves_to_curated_action():
         assert data["parseable"] is True
         assert data["action"]["name"] == "clean_temp_and_cache"
         assert data["action"]["name"] != "delete_path"
+
+
+@pytest.mark.asyncio
+async def test_clean_recycle_bin_no_number_defaults_to_immediate():
+    """
+    §10.1: 'please clean my recycle bin' (no number) -> trigger.type: 'immediate', empty_trash, NEVER 80% threshold
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/parse", json={"raw_text": "please clean my recycle bin"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parseable"] is True
+        assert data["trigger"]["type"] == "immediate"
+        assert "threshold" not in data["trigger"]["params"]
+        assert data["action"]["name"] in ["empty_trash", "empty_recycle_bin"]
+
+
+@pytest.mark.asyncio
+async def test_remind_me_after_5_minutes_delay_trigger():
+    """
+    §10.2: 'remind me to stretch after 5 minutes' -> trigger.type='delay', delay_seconds=300, action='write_log_notification'
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/parse", json={"raw_text": "remind me to stretch after 5 minutes"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parseable"] is True
+        assert data["trigger"]["type"] == "delay"
+        assert data["trigger"]["params"]["delay_seconds"] == 300
+        assert data["action"]["name"] == "write_log_notification"
+
+
+@pytest.mark.asyncio
+async def test_email_me_after_10_minutes_delay_trigger():
+    """
+    §10.2: 'email me after 10 minutes about the meeting' -> trigger.type='delay', delay_seconds=600, action='send_email'
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/parse", json={"raw_text": "email me after 10 minutes about the meeting"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parseable"] is True
+        assert data["trigger"]["type"] == "delay"
+        assert data["trigger"]["params"]["delay_seconds"] == 600
+        assert data["action"]["name"] == "send_email"
 

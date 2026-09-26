@@ -52,6 +52,7 @@ class HostAgentClient:
         sys_info["capabilities"] = [
             "empty_trash", "empty_recycle_bin",
             "check_disk_usage", "list_drives",
+            "get_memory_usage", "list_top_processes", "list_connected_devices",
             "clean_temp_and_cache",
             "delete_path", "preview_delete_path",
             "browser_open_url", "browser_list_open_tabs",
@@ -157,6 +158,111 @@ class HostAgentClient:
             success=True,
             message=f"Found {len(drives)} available drives",
             details={"drives": drives}
+        )
+
+    def execute_get_memory_usage(self, params: Dict[str, Any]) -> ActionResult:
+        try:
+            import psutil
+            vm = psutil.virtual_memory()
+            total_gb = round(vm.total / (1024**3), 2)
+            avail_gb = round(vm.available / (1024**3), 2)
+            used_gb = round(vm.used / (1024**3), 2)
+            pct = vm.percent
+            return ActionResult(
+                success=True,
+                message=f"Memory Usage: {pct}% ({used_gb} GB used of {total_gb} GB, {avail_gb} GB available)",
+                details={
+                    "percent": pct,
+                    "total_gb": total_gb,
+                    "available_gb": avail_gb,
+                    "used_gb": used_gb
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error checking memory usage: {e}")
+            return ActionResult(success=False, message=f"Failed to check memory usage: {e}")
+
+    def execute_list_top_processes(self, params: Dict[str, Any]) -> ActionResult:
+        try:
+            import psutil
+            sort_by = params.get("sort_by", "memory")
+            limit = int(params.get("limit", 10))
+            procs = []
+            for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+                try:
+                    info = p.info
+                    procs.append({
+                        "pid": info['pid'],
+                        "name": info['name'] or "Unknown",
+                        "cpu_percent": round(info['cpu_percent'] or 0.0, 1),
+                        "memory_percent": round(info['memory_percent'] or 0.0, 1)
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            key = "memory_percent" if sort_by == "memory" else "cpu_percent"
+            procs.sort(key=lambda x: x[key], reverse=True)
+            top_n = procs[:limit]
+            return ActionResult(
+                success=True,
+                message=f"Top {len(top_n)} processes by {sort_by} usage",
+                details={"processes": top_n, "sort_by": sort_by, "limit": limit}
+            )
+        except Exception as e:
+            logger.error(f"Error listing processes: {e}")
+            return ActionResult(success=False, message=f"Failed to list processes: {e}")
+
+    def execute_list_connected_devices(self, params: Dict[str, Any]) -> ActionResult:
+        devices = []
+        os_fam = self.platform_info.get("os_family", "Windows")
+        try:
+            if os_fam == "Windows":
+                import subprocess, json
+                p = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command', 
+                     'Get-CimInstance Win32_PnPEntity | Where-Object PNPClass -in Mouse,Keyboard,DiskDrive,USB | Select-Object PNPClass, Name, Manufacturer | ConvertTo-Json -Compress'],
+                    capture_output=True, text=True, timeout=8
+                )
+                if p.stdout.strip():
+                    raw = json.loads(p.stdout)
+                    if isinstance(raw, dict):
+                        raw = [raw]
+                    for item in raw:
+                        cls = item.get("PNPClass", "")
+                        dev_type = "Mouse" if cls == "Mouse" else ("Keyboard" if cls == "Keyboard" else ("USB Storage" if cls == "DiskDrive" else "Other"))
+                        devices.append({
+                            "type": dev_type,
+                            "name": item.get("Name", "Unknown Device"),
+                            "vendor": item.get("Manufacturer", "Unknown")
+                        })
+            elif os_fam == "Darwin":
+                import subprocess
+                p = subprocess.run(['system_profiler', 'SPUSBDataType'], capture_output=True, text=True, timeout=8)
+                for line in p.stdout.splitlines():
+                    line_s = line.strip()
+                    if line_s and not line_s.endswith(":") and len(line_s) > 2:
+                        devices.append({"type": "Other", "name": line_s, "vendor": "Apple/USB"})
+            else:
+                import subprocess
+                p = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=8)
+                for line in p.stdout.splitlines():
+                    if line.strip():
+                        parts = line.split(":", 2)
+                        name = parts[2].strip() if len(parts) > 2 else line.strip()
+                        dev_type = "Mouse" if "mouse" in name.lower() else ("Keyboard" if "keyboard" in name.lower() else "Other")
+                        devices.append({"type": dev_type, "name": name, "vendor": "Linux USB"})
+        except Exception as e:
+            logger.warning(f"Error enumerating connected devices: {e}")
+
+        if not devices:
+            devices = [
+                {"type": "Keyboard", "name": "Default System Keyboard", "vendor": "Standard"},
+                {"type": "Mouse", "name": "Default System Mouse", "vendor": "Standard"}
+            ]
+
+        return ActionResult(
+            success=True,
+            message=f"Found {len(devices)} connected devices",
+            details={"devices": devices}
         )
 
     def execute_clean_temp_and_cache(self, params: Dict[str, Any]) -> ActionResult:
@@ -343,6 +449,12 @@ class HostAgentClient:
                     result = self.execute_check_disk_usage(params)
                 elif action_name == "list_drives":
                     result = self.execute_list_drives(params)
+                elif action_name == "get_memory_usage":
+                    result = self.execute_get_memory_usage(params)
+                elif action_name == "list_top_processes":
+                    result = self.execute_list_top_processes(params)
+                elif action_name == "list_connected_devices":
+                    result = self.execute_list_connected_devices(params)
                 elif action_name == "clean_temp_and_cache":
                     result = self.execute_clean_temp_and_cache(params)
                 elif action_name == "preview_delete_path":

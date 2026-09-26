@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from shared.logging_config import setup_logging_and_middleware
-from .time_triggers import scheduler, schedule_time_automation
+from .time_triggers import scheduler, schedule_time_automation, schedule_delay_automation
 from .threshold_watcher import check_and_fire_threshold_automations
 from .metrics import get_metric, set_metric, MOCK_METRICS
 
@@ -91,6 +91,9 @@ def register_trigger(req: TriggerRegistrationRequest):
     if trig_type == "time":
         job_id = schedule_time_automation(auto_id, params, action)
         return {"status": "registered", "type": "time", "job_id": job_id}
+    elif trig_type == "delay":
+        job_id = schedule_delay_automation(auto_id, params, action)
+        return {"status": "registered", "type": "delay", "job_id": job_id}
     elif trig_type == "threshold":
         # Threshold triggers are evaluated in polling loop from active automations in DB
         return {"status": "registered", "type": "threshold"}
@@ -100,8 +103,16 @@ def register_trigger(req: TriggerRegistrationRequest):
 
 @app.delete("/triggers/{automation_id}")
 def unregister_trigger(automation_id: str):
-    job_id = f"time_job_{automation_id}"
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
-        return {"status": "unregistered", "job_id": job_id}
-    return {"status": "unregistered", "message": "No active time job found"}
+    time_job_id = f"time_job_{automation_id}"
+    delay_job_id = f"delay_job_{automation_id}"
+    removed = []
+    if scheduler.get_job(time_job_id):
+        scheduler.remove_job(time_job_id)
+        removed.append(time_job_id)
+    if scheduler.get_job(delay_job_id):
+        scheduler.remove_job(delay_job_id)
+        removed.append(delay_job_id)
+
+    if removed:
+        return {"status": "unregistered", "job_ids": removed}
+    return {"status": "unregistered", "message": "No active scheduled job found"}

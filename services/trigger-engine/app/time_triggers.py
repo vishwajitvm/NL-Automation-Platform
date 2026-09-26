@@ -1,8 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 from typing import Any, Dict, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 import pytz
 
 from .queue import enqueue_job
@@ -18,6 +19,39 @@ def fire_time_job(automation_id: str, action_name: str, params: Dict[str, Any], 
     logger.info(f"Time trigger fired for automation {automation_id} at {now.isoformat()}")
     enqueue_job(automation_id, now, action_name, params, trigger_info=trigger_info)
     update_last_fired(automation_id, now)
+
+
+def fire_delay_job(automation_id: str, action_name: str, params: Dict[str, Any], trigger_info: Dict[str, Any]):
+    now = datetime.now(timezone.utc)
+    logger.info(f"One-shot delay trigger fired for automation {automation_id} at {now.isoformat()}")
+    enqueue_job(automation_id, now, action_name, params, trigger_info=trigger_info)
+    update_last_fired(automation_id, now)
+
+
+def schedule_delay_automation(automation_id: str, trigger_params: Dict[str, Any], action: Dict[str, Any]) -> str:
+    delay_seconds = int(trigger_params.get("delay_seconds", 0))
+    run_date = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+
+    action_name = action.get("name", "write_log_notification")
+    action_params = action.get("params", {})
+    trigger_info = {"type": "delay", "params": trigger_params}
+
+    job_id = f"delay_job_{automation_id}"
+
+    # Remove existing job if present
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+
+    date_trigger = DateTrigger(run_date=run_date, timezone=pytz.utc)
+    scheduler.add_job(
+        fire_delay_job,
+        trigger=date_trigger,
+        id=job_id,
+        args=[automation_id, action_name, action_params, trigger_info],
+        replace_existing=True
+    )
+    logger.info(f"Scheduled one-shot delay job {job_id} to fire in {delay_seconds}s at {run_date.isoformat()}")
+    return job_id
 
 
 def schedule_time_automation(automation_id: str, trigger_params: Dict[str, Any], action: Dict[str, Any]) -> str:

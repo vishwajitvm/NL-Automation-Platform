@@ -209,7 +209,9 @@ class DeterministicRuleProvider(LLMProvider):
             "clean", "recycle", "bin", "trash", "email", "summary", "friday", "disk", "usage",
             "notify", "every", "when", "at", "if", "send", "webhook", "monday", "schedule",
             "healthcheck", "check", "log", "alert", "run", "search", "delete", "remove", "wipe",
-            "drive", "drives", "browser", "tab", "tabs", "open", "temp", "cache"
+            "drive", "drives", "browser", "tab", "tabs", "open", "temp", "cache",
+            "remind", "reminder", "stretch", "after", "minutes", "minute", "hours", "hour",
+            "device", "devices", "process", "processes", "memory", "ram", "format"
         }
         meaningful_count = sum(1 for w in clean_words if w in known_keywords)
 
@@ -279,6 +281,18 @@ class DeterministicRuleProvider(LLMProvider):
             )
             return schema.model_validate(res.model_dump())
 
+        # Case 0B2: Format drive
+        if "format" in text:
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="time", params={"cron": "0 0 * * *", "timezone": "UTC"}),
+                action=Action(name="clean_temp_and_cache", params={}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
         # Case 0C: List drives
         if "list" in text and "drive" in text:
             res = ParsedResult(
@@ -304,19 +318,108 @@ class DeterministicRuleProvider(LLMProvider):
             )
             return schema.model_validate(res.model_dump())
 
-        # Case 1: Recycle bin / trash threshold
-        if "recycle" in text or "bin" in text or "trash" in text:
-            pct_match = re.search(r"(\d+)\s*%", text)
-            thresh = int(pct_match.group(1)) if pct_match else 80
+        # Case 0E: Relative Delay Triggers ("remind me after 5 minutes", "email me after 10 minutes")
+        delay_match = re.search(r"\b(?:after|in)\s+(\d+)\s*(minute|minutes|min|mins|hour|hours|second|seconds|sec|secs)\b", text)
+        if delay_match:
+            num = int(delay_match.group(1))
+            unit = delay_match.group(2)
+            if "hour" in unit:
+                delay_sec = num * 3600
+            elif "min" in unit:
+                delay_sec = num * 60
+            else:
+                delay_sec = num
+
+            if "email" in text:
+                subject = "Reminder"
+                if "about" in text:
+                    subject = "Reminder: " + text.split("about", 1)[1].strip()
+                act = Action(name="send_email", params={"subject": subject, "body": prompt})
+            else:
+                act = Action(name="write_log_notification", params={"message": prompt})
+
             res = ParsedResult(
                 raw_text=prompt,
                 detected_count=1,
                 parseable=True,
-                trigger=Trigger(type="threshold", params={"metric": "recycle_bin_percentage", "threshold": thresh, "comparator": ">="}),
-                action=Action(name="empty_recycle_bin", params={}),
+                trigger=Trigger(type="delay", params={"delay_seconds": delay_sec}),
+                action=act,
                 ambiguities=[]
             )
             return schema.model_validate(res.model_dump())
+
+        # Case 0F: System Monitoring actions
+        if "device" in text and ("connected" in text or "plugged" in text or "external" in text):
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="list_connected_devices", params={}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        if "process" in text or "taskmanager" in text or "task manager" in text or ("consuming" in text and "ram" in text):
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="list_top_processes", params={"sort_by": "memory", "limit": 10}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        if ("memory" in text or "ram" in text) and ("usage" in text or "percent" in text or "consumption" in text or "how much" in text):
+            res = ParsedResult(
+                raw_text=prompt,
+                detected_count=1,
+                parseable=True,
+                trigger=Trigger(type="immediate", params={}),
+                action=Action(name="get_memory_usage", params={}),
+                ambiguities=[]
+            )
+            return schema.model_validate(res.model_dump())
+
+        # Case 1: Recycle bin / trash threshold vs immediate
+        if "recycle" in text or "bin" in text or "trash" in text:
+            act_name = "empty_recycle_bin" if "recycle" in text else "empty_trash"
+            pct_match = re.search(r"(\d+)\s*%", text)
+            if pct_match:
+                thresh = int(pct_match.group(1))
+                res = ParsedResult(
+                    raw_text=prompt,
+                    detected_count=1,
+                    parseable=True,
+                    trigger=Trigger(type="threshold", params={"metric": "recycle_bin_percentage", "threshold": thresh, "comparator": ">="}),
+                    action=Action(name=act_name, params={}),
+                    ambiguities=[]
+                )
+                return schema.model_validate(res.model_dump())
+            elif "when" in text and "full" in text:
+                res = ParsedResult(
+                    raw_text=prompt,
+                    detected_count=1,
+                    parseable=True,
+                    trigger=Trigger(type="threshold", params={"metric": "recycle_bin_percentage"}),
+                    action=Action(name=act_name, params={}),
+                    ambiguities=[
+                        Ambiguity(field_path="trigger.params.threshold", question="At what percentage capacity should the recycle bin be cleaned?")
+                    ]
+                )
+                return schema.model_validate(res.model_dump())
+            else:
+                # 10.1 BUGFIX: NEVER invent a numeric threshold. Default to immediate!
+                res = ParsedResult(
+                    raw_text=prompt,
+                    detected_count=1,
+                    parseable=True,
+                    trigger=Trigger(type="immediate", params={}),
+                    action=Action(name=act_name, params={}),
+                    ambiguities=[]
+                )
+                return schema.model_validate(res.model_dump())
 
         # Case 2: Email time-based
         if "email" in text:

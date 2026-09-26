@@ -110,3 +110,31 @@ async def test_metrics_api_endpoints():
         resp2 = await ac.get("/metrics/test_disk")
         assert resp2.status_code == 200
         assert resp2.json()["value"] == 92.5
+
+
+@pytest.mark.asyncio
+async def test_delay_based_schedule():
+    """
+    §10.2: Delay-based automation schedules one-shot job at now() + delay_seconds
+    """
+    auto_id = str(uuid.uuid4())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/triggers", json={
+            "automation_id": auto_id,
+            "trigger": {"type": "delay", "params": {"delay_seconds": 300}},
+            "action": {"name": "write_log_notification", "params": {"message": "stretch"}}
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "registered"
+        assert data["type"] == "delay"
+        assert data["job_id"] == f"delay_job_{auto_id}"
+
+        job = scheduler.get_job(f"delay_job_{auto_id}")
+        assert job is not None
+
+        # Unregister check
+        resp_del = await ac.delete(f"/triggers/{auto_id}")
+        assert resp_del.status_code == 200
+        assert scheduler.get_job(f"delay_job_{auto_id}") is None

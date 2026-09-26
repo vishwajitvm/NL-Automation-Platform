@@ -1,0 +1,86 @@
+flowchart TD
+    START([User Enters Prompt / Command]) --> S1{"Step 1: Request Router\n(Pre-Gate Hazard Taxonomy)"}
+
+    %% ===== LANE: DISALLOWED CONTENT =====
+    S1 -->|"Hazardous / Illicit Intent\n(Llama Guard Default Taxonomy)"| S1_REFUSE{"Credential Query?"}
+    S1_REFUSE -->|"Yes (e.g. wifi/admin password)"| CRED_FIXED["Fixed Refusal (§10.6):\n'I'm sorry, but this information is not allowed\nto be shared — we cannot share system credentials with anyone.'"]
+    S1_REFUSE -->|"No (e.g. illegal goods)"| POLICY_REFUSE["Content Policy Refusal\n(Redirect to resources)"]
+    CRED_FIXED --> AUDIT_BLOCKED1["audit_log: content_policy_blocked"] --> END1([End])
+    POLICY_REFUSE --> AUDIT_BLOCKED2["audit_log: content_policy_blocked"] --> END2([End])
+
+    %% ===== LANE: INFORMATIONAL QUERY =====
+    S1 -->|"Informational / Diagnostic Query\n(e.g. RAM, devices, search, web)"| S7_INFO{"Step 7: Dynamic Ethics Agent\n(POST /ethics-review)"}
+    S7_INFO -->|"Deny (Stalking/Harassment)"| INFO_DENY["Refuse with Stored Reasoning\naudit_log: ethics_review"] --> END_INFO_DENY([End])
+    S7_INFO -->|"Needs Clarification\n(Ambiguous Person Search §10.7)"| INFO_CLARIFY["Interrupt & Ask:\n'What is the purpose of this lookup?'"] --> END_INFO_CLARIFY([Await User Answer])
+    S7_INFO -->|"Allow (Ordinary Diagnostics/Facts)"| INFO_EXEC["Execution Sandbox / Host Agent\n(get_memory_usage, list_top_processes,\nlist_connected_devices, web_search)"]
+    INFO_EXEC --> INFO_RETURN["Return Real-Time JSON Result to UI\naudit_log: action_executed"] --> END_INFO([Done])
+
+    %% ===== LANE: AUTOMATION PIPELINE (11 STEPS) =====
+    S1 -->|"Automation Request\n('do X when Y' / delayed / scheduled)"| S2["Step 2: Intent Parser\n(Multi-Model: Gemini -> Groq -> OpenRouter -> Rules)"]
+
+    S2 --> S2_CHK{"Parse Check"}
+    S2_CHK -->|"Gibberish / Unparseable"| S2_ERR1["HTTP 400\n'I couldn't understand that.'"] --> END_PARSE_ERR([End])
+    S2_CHK -->|"Compound (2+ intents)"| S2_ERR2["HTTP 422\n'Please describe one automation at a time.'"] --> END_COMPOUND([End])
+    S2_CHK -->|"Valid Single Intent"| S2_AUDIT["audit_log: parsed"]
+
+    S2_AUDIT --> S3{"Step 3: Registry Check\nIs action.name in ALLOWED_ACTIONS?"}
+    S3 -->|"No"| S3_REJ["HTTP 400: Unregistered Action\nReject without fallback"] --> END_UNREG([End])
+
+    S3 -->|"Yes"| S4{"Step 4: Hard Denylist\n(Deterministic Check Before AI)\nDoes path target Drive Root or System Folder?"}
+    S4 -->|"YES - Forbidden Path\n(e.g. C:\\ or /etc)"| S4_REJ["HTTP 400: FORBIDDEN_DELETION\nShort-circuits before any AI calls!\nConfirmation modals NEVER offered"] --> END_FORBIDDEN([End])
+
+    S4 -->|"No / Safe Path"| S5["Step 5: Prompt Guard Pre-Filter\n(Screen Raw Text for Injections/Jailbreaks)"]
+    S5 --> S5_CHK{"Flagged?"}
+    S5_CHK -->|"Yes"| S5_REJ["Blocked: prompt_injection\naudit_log: guardrail_blocked"] --> END_INJ([End])
+
+    S5_CHK -->|"No"| S6["Step 6: Llama Guard 4 Custom Taxonomy\n(destructive_fs_op, credential_exfil,\nnetwork_exfil, malware_behavior)"]
+    S6 --> S6_CHK{"Guardrail Verdict\n(Fail-Closed)"}
+    S6_CHK -->|"Unreachable"| S6_FAILCLOSED["Fail Closed: 503 Guardrail Unavailable\naudit_log: guardrail_blocked"] --> END_FAILCLOSED([End])
+    S6_CHK -->|"Blocked: credential_exfil"| S6_CRED["Fixed Refusal (§10.6):\n'I'm sorry, but this information is not allowed...'"] --> END_CRED([End])
+    S6_CHK -->|"Blocked: other category"| S6_REJ["HTTP 400: GUARDRAIL_BLOCKED\naudit_log: guardrail_blocked"] --> END_GUARD_BLOCK([End])
+
+    S6_CHK -->|"Approved"| S6_OK["audit_log: guardrail_approved"]
+
+    S6_OK --> S7["Step 7: Dynamic Ethics Reasoning Agent\n(Rubric-based reasoning judge catching long-tail harms)"]
+    S7 --> S7_CHK{"Ethics Verdict\n(Fail-Closed)"}
+    S7_CHK -->|"Deny (Novel Harm)"| S7_REJ["HTTP 400: ETHICS_DENIED\nReturn structured reasoning\naudit_log: ethics_review"] --> END_ETHICS_DENY([End])
+    S7_CHK -->|"Needs Clarification"| S7_AMBIG["Attach Clarifying Question to Plan"]
+    S7_CHK -->|"Allow (Ordinary Request)"| S7_OK["audit_log: ethics_review (verdict=allow)"]
+
+    S7_AMBIG --> S8
+    S7_OK --> S8["Step 8: Risk Tier Lookup\n(Deterministic: Low / Medium / High)"]
+
+    S8 --> S9{"Step 9: Confirmation Required?\n(Medium / High Risk)"}
+    S9 -->|"Yes (e.g. delete_path,\nclean_temp_and_cache)"| S9_CONF["SweetAlert2 3-Stage Modal Flow:\n1. Dry-run Preview (size, sample paths)\n2. Typed Path Confirmation\n3. 3-Second Delay Countdown"]
+    S9_CONF --> S9_CHK{"Confirmed by User?"}
+    S9_CHK -->|"Cancelled / Timed Out"| S9_CANCEL["Draft Cancelled / Archived (24h)\naudit_log: destructive_action_confirmation"] --> END_CANCEL([End])
+    S9_CHK -->|"Confirmed"| S9_AUDIT["audit_log: destructive_action_confirmation"] --> S10
+
+    S9 -->|"No (Low Risk: email, notification,\ndiagnostics, web search)"| S10{"Step 10: Ambiguity Resolution\n(LangGraph Decision Agent)"}
+
+    S10 -->|"Ambiguous (e.g. 'when it is full')"| S10_PAUSE["LangGraph Interrupt Checkpoint\nStatus: draft\naudit_log: ambiguity_asked"] --> S10_WAIT([User Responds via /resume])
+    S10_WAIT --> S10_RESUME["LangGraph Resumes Checkpoint\nResolve parameters\naudit_log: ambiguity_resolved"] --> S11
+
+    S10 -->|"Unambiguous"| S11["Step 11: Finalize & Persist or Dispatch"]
+
+    %% ===== STEP 11 DISPATCH LANES =====
+    S11 --> S11_TRIG{"Trigger Type?"}
+    S11_TRIG -->|"immediate"| S11_IMM["Dispatch Directly to Execution Sandbox\n(Host Agent job queued if host-boundary)"]
+    S11_TRIG -->|"delay (e.g. 300s)"| S11_DELAY["Trigger Engine: APScheduler DateTrigger\n(Fires once at now() + delay_seconds, then deregisters)\naudit_log: trigger_registered"]
+    S11_TRIG -->|"time (cron) / threshold"| S11_CRON["Trigger Engine: APScheduler CronTrigger / Poller\n(Persistent watcher runtime)\naudit_log: trigger_registered"]
+
+    S11_DELAY --> S11_FIRE["Trigger Fires once\naudit_log: trigger_fired"]
+    S11_CRON --> S11_FIRE
+
+    S11_FIRE --> EXEC["Execution Sandbox Runtime"]
+    S11_IMM --> EXEC
+
+    EXEC --> ACTION{"Action Boundary?"}
+    ACTION -->|"Host Action (Trash, Devices, RAM)"| HOST["Host Agent Polling Client\n(Executes natively on Host OS)"]
+    ACTION -->|"Container Action (SMTP Email, Webhook, Log)"| SANDBOX["Sandbox Container Execution\n(smtplib TLS / HTTP / Logger)"]
+
+    HOST --> EXEC_RES{"Success?"}
+    SANDBOX --> EXEC_RES
+
+    EXEC_RES -->|"Success"| AUDIT_EXEC["audit_log: action_executed\nStatus: completed"] --> END_SUCCESS([Active / Finished])
+    EXEC_RES -->|"Failure"| AUDIT_FAIL["audit_log: action_failed\n(Dead-Letter Queue / Alert)"] --> END_FAILED([Failed])
