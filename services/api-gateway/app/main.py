@@ -251,13 +251,14 @@ async def handle_informational_query(client: httpx.AsyncClient, raw_text: str, t
         )
 
     if ethics_data.get("verdict") == "needs_clarification":
-        return {
-            "id": str(uuid.uuid4()),
-            "status": "draft",
-            "lane": "informational_query",
-            "clarification_prompt": ethics_data.get("clarifying_question", "Could you clarify the purpose of this request?"),
-            "reasoning": ethics_data.get("reasoning"),
-        }
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "GUARDRAIL_BLOCKED",
+                "message": f"Ethics review requires clarification: {ethics_data.get('clarifying_question', 'Could you clarify the purpose of this request?')}",
+                "reasoning": ethics_data.get("reasoning")
+            }
+        )
 
     # Determine action & parameters
     act = target_action
@@ -354,12 +355,13 @@ async def create_automation(req: CreateAutomationRequest):
                 
                 # Informational query lane
                 if route_data.get("needs_clarification"):
-                    return {
-                        "id": "temp-disambiguate",
-                        "status": "blocked",
-                        "clarification_prompt": route_data.get("clarifying_question"),
-                        "plan": None
-                    }
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "GUARDRAIL_BLOCKED",
+                            "message": f"Ambiguous request: {route_data.get('clarifying_question')}"
+                        }
+                    )
             if route_data.get("lane") == "informational_query":
                     logger.info(f"Routing to informational query handler: target_action={route_data.get('target_action')}")
                     return await handle_informational_query(client, raw_text, route_data.get("target_action"))
@@ -594,12 +596,13 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                     }
                 )
             if route_data.get("needs_clarification"):
-                return {
-                    "id": "temp-disambiguate",
-                    "status": "blocked",
-                    "clarification_prompt": route_data.get("clarifying_question"),
-                    "plan": None
-                }
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "GUARDRAIL_BLOCKED",
+                        "message": f"Ambiguous request: {route_data.get('clarifying_question')}"
+                    }
+                )
             if route_data.get("lane") == "informational_query":
                 return await handle_informational_query(client, raw_text, route_data.get("target_action"))
 
@@ -691,13 +694,12 @@ async def execute_immediate_command(req: CreateAutomationRequest):
             )
 
         if ethics_data.get("verdict") == "needs_clarification":
-            return {
-                "id": str(uuid.uuid4()),
-                "status": "draft",
-                "clarification_prompt": ethics_data.get("clarifying_question"),
-                "reasoning": ethics_data.get("reasoning"),
-                "plan": plan_data
-            }
+            logger.info(f"Ethics review requested clarification: '{ethics_data.get('clarifying_question')}'")
+            if not plan_data.get("ambiguities"):
+                plan_data["ambiguities"] = [{
+                    "field_path": "ethics_clarification",
+                    "question": ethics_data.get("clarifying_question", "Could you clarify the purpose of this request?")
+                }]
 
         # Step 8, 9 & 10. Decision Agent Resolution
         decision_resp = await client.post(f"{DECISION_AGENT_URL}/resolve", json={"plan": plan_data})
