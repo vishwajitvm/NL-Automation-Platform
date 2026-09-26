@@ -517,3 +517,11 @@
 - [x] 101/101 platform tests passing with 0 regressions.
 
 
+Phase 12 Completion Notes:
+- Full-pipeline integration tests created (tests/e2e/test_full_pipeline.py) against live stack.
+- Proactive quota tracking, API endpoints for budget (/api/v1/budget).
+- New actions added (Slack, Discord, Calendar, Sheets, SMS).
+- Automation templates library created, UI added.
+- Router disambiguation added.
+- Chaos testing scenarios documented and scripts added.
+- Interview deliverables (docs/design-decisions.md) completed.
