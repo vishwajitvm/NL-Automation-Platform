@@ -1,5 +1,5 @@
 from pydantic import BaseModel, HttpUrl, validator
-from ..registry import ActionResult
+from .common import ActionResult
 import httpx
 import logging
 logger = logging.getLogger('execution-sandbox')
@@ -19,7 +19,7 @@ async def send_slack_webhook(params: SlackWebhookParams) -> ActionResult:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(str(params.webhook_url), json={"text": params.message})
             if resp.status_code >= 400:
-                return ActionResult(success=False, output=f"Failed: {resp.status_code}")
-            return ActionResult(success=True, output="Message sent to Slack")
+                return ActionResult(success=False, message=f"Failed: {resp.status_code}")
+            return ActionResult(success=True, message="Message sent to Slack")
     except Exception as e:
-        return ActionResult(success=False, output=str(e))
+        return ActionResult(success=False, message=str(e))
