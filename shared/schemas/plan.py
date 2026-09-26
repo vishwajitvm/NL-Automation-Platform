@@ -33,3 +33,4 @@ class AutomationPlan(BaseModel):
     action: Action | None = None
     ambiguities: list[Ambiguity] = Field(default_factory=list)
     parseable: bool = True
+    degraded_mode: bool = False

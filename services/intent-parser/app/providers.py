@@ -21,6 +21,7 @@ class ParsedResult(BaseModel):
     trigger: Optional[Trigger] = None
     action: Optional[Action] = None
     ambiguities: List[Ambiguity] = Field(default_factory=list)
+    degraded_mode: bool = False
 
 
 class LLMError(Exception):
@@ -222,8 +223,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=False,
                 trigger=None,
                 action=None,
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Compound sentence check: two distinct trigger/action clauses
@@ -237,8 +237,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=None,
                 action=None,
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Ambiguity check: e.g. "clean the recycle bin when it is full"
@@ -251,8 +250,9 @@ class DeterministicRuleProvider(LLMProvider):
                 action=Action(name="empty_recycle_bin", params={}),
                 ambiguities=[
                     Ambiguity(field_path="trigger.params.threshold", question="At what percentage capacity should the recycle bin be cleaned?")
-                ]
-            )
+                ],
+                        degraded_mode=True
+                    )
             return schema.model_validate(res.model_dump())
 
         # Case 0A: Curated Clean ("clean my C drive" -> clean_temp_and_cache, NEVER delete_path)
@@ -263,8 +263,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="clean_temp_and_cache", params={"include_browser_cache": True}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0B: Delete path (forbidden or specific)
@@ -277,8 +276,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="delete_path", params={"path": target_path}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0B2: Format drive
@@ -289,8 +287,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="time", params={"cron": "0 0 * * *", "timezone": "UTC"}),
                 action=Action(name="clean_temp_and_cache", params={}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0C: List drives
@@ -301,8 +298,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="list_drives", params={}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0D: Web search
@@ -314,8 +310,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="web_search", params={"query": query}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0E: Relative Delay Triggers ("remind me after 5 minutes", "email me after 10 minutes")
@@ -344,8 +339,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="delay", params={"delay_seconds": delay_sec}),
                 action=act,
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 0F: System Monitoring actions
@@ -356,8 +350,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="list_connected_devices", params={}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         if "process" in text or "taskmanager" in text or "task manager" in text or ("consuming" in text and "ram" in text):
@@ -367,8 +360,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="list_top_processes", params={"sort_by": "memory", "limit": 10}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         if ("memory" in text or "ram" in text) and ("usage" in text or "percent" in text or "consumption" in text or "how much" in text):
@@ -378,8 +370,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="immediate", params={}),
                 action=Action(name="get_memory_usage", params={}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 1: Recycle bin / trash threshold vs immediate
@@ -394,8 +385,7 @@ class DeterministicRuleProvider(LLMProvider):
                     parseable=True,
                     trigger=Trigger(type="threshold", params={"metric": "recycle_bin_percentage", "threshold": thresh, "comparator": ">="}),
                     action=Action(name=act_name, params={}),
-                    ambiguities=[]
-                )
+                    ambiguities=[], degraded_mode=True)
                 return schema.model_validate(res.model_dump())
             elif "when" in text and "full" in text:
                 res = ParsedResult(
@@ -406,8 +396,9 @@ class DeterministicRuleProvider(LLMProvider):
                     action=Action(name=act_name, params={}),
                     ambiguities=[
                         Ambiguity(field_path="trigger.params.threshold", question="At what percentage capacity should the recycle bin be cleaned?")
-                    ]
-                )
+                    ],
+                        degraded_mode=True
+                    )
                 return schema.model_validate(res.model_dump())
             else:
                 # 10.1 BUGFIX: NEVER invent a numeric threshold. Default to immediate!
@@ -417,8 +408,7 @@ class DeterministicRuleProvider(LLMProvider):
                     parseable=True,
                     trigger=Trigger(type="immediate", params={}),
                     action=Action(name=act_name, params={}),
-                    ambiguities=[]
-                )
+                    ambiguities=[], degraded_mode=True)
                 return schema.model_validate(res.model_dump())
 
         # Case 2: Email time-based
@@ -435,8 +425,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="time", params={"cron": cron, "timezone": "UTC"}),
                 action=Action(name="send_email", params={"subject": "Summary", "body": "Summary email"}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 3: Disk usage threshold
@@ -449,8 +438,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="threshold", params={"metric": "disk_usage_pct", "threshold": thresh, "comparator": ">="}),
                 action=Action(name="write_log_notification", params={"level": "warning", "message": f"Disk usage exceeded {thresh}%"}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 4: Webhook
@@ -461,8 +449,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="time", params={"cron": "0 0 * * *", "timezone": "UTC"}),
                 action=Action(name="send_webhook", params={"url": "https://example.com/webhook"}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Case 5: Healthcheck
@@ -473,8 +460,7 @@ class DeterministicRuleProvider(LLMProvider):
                 parseable=True,
                 trigger=Trigger(type="time", params={"cron": "*/5 * * * *", "timezone": "UTC"}),
                 action=Action(name="run_http_healthcheck", params={"url": "https://example.com/health"}),
-                ambiguities=[]
-            )
+                ambiguities=[], degraded_mode=True)
             return schema.model_validate(res.model_dump())
 
         # Fallback single unparsed
@@ -484,8 +470,7 @@ class DeterministicRuleProvider(LLMProvider):
             parseable=False,
             trigger=None,
             action=None,
-            ambiguities=[]
-        )
+            ambiguities=[], degraded_mode=True)
         return schema.model_validate(res.model_dump())
 
 

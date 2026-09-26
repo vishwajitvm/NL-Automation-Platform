@@ -537,11 +537,15 @@ async def create_automation(req: CreateAutomationRequest):
 
         if decision_data.get("status") == "draft":
             logger.info(f"Automation paused in draft: prompt='{decision_data.get('clarification_question')}'")
+            if decision_data.get("risk_tier") and plan_data.get("action"):
+                plan_data["action"]["risk_tier"] = decision_data.get("risk_tier")
             return {
                 "id": decision_data["automation_id"],
+                "degraded_mode": plan_data.get("degraded_mode", False),
                 "status": "draft",
                 "confirmation_required": decision_data.get("confirmation_required", False),
                 "risk_tier": decision_data.get("risk_tier"),
+                "degraded_mode": plan_data.get("degraded_mode", False),
                 "preview": decision_data.get("preview"),
                 "clarification_prompt": decision_data.get("clarification_question"),
                 "plan": plan_data,
@@ -702,11 +706,14 @@ async def execute_immediate_command(req: CreateAutomationRequest):
 
         decision_data = decision_resp.json()
         if decision_data.get("status") == "draft":
+            if decision_data.get("risk_tier") and plan_data.get("action"):
+                plan_data["action"]["risk_tier"] = decision_data.get("risk_tier")
             return {
                 "id": decision_data["automation_id"],
                 "status": "draft",
                 "confirmation_required": decision_data.get("confirmation_required", False),
                 "risk_tier": decision_data.get("risk_tier"),
+                "degraded_mode": plan_data.get("degraded_mode", False),
                 "preview": decision_data.get("preview"),
                 "plan": plan_data
             }

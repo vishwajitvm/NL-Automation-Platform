@@ -96,10 +96,18 @@ async def parse_intent(req: ParseRequest):
     )
 
     # 3. Successful parse
+    from .db import log_audit_event
+    log_audit_event("parsed", {
+        "action": action_name,
+        "trigger": trigger_type,
+        "raw_text": raw_text,
+        "degraded_mode": parsed.degraded_mode
+    })
     return AutomationPlan(
         raw_text=raw_text,
         trigger=parsed.trigger,
         action=parsed.action,
         ambiguities=parsed.ambiguities,
-        parseable=True
+        parseable=True,
+        degraded_mode=parsed.degraded_mode
     )
