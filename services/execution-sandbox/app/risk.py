@@ -24,6 +24,14 @@ RISK_TIERS: dict[str, RiskTier] = {
     "empty_recycle_bin": "medium",
     "browser_clear_managed_cache": "medium",
 
+    "send_slack_webhook": "low",
+    "send_discord_webhook": "low",
+    "create_calendar_event": "low",
+    "append_google_sheet_row": "low",
+    "send_sms": "low",
+    "list_running_applications": "low",
+
+
     # High risk — arbitrary user-specified path deletion
     "delete_path": "high",
 }

@@ -353,7 +353,14 @@ async def create_automation(req: CreateAutomationRequest):
                     )
                 
                 # Informational query lane
-                if route_data.get("lane") == "informational_query":
+                if route_data.get("needs_clarification"):
+                return {
+                    "id": "temp-disambiguate",
+                    "status": "blocked",
+                    "clarification_prompt": route_data.get("clarifying_question"),
+                    "plan": None
+                }
+            if route_data.get("lane") == "informational_query":
                     logger.info(f"Routing to informational query handler: target_action={route_data.get('target_action')}")
                     return await handle_informational_query(client, raw_text, route_data.get("target_action"))
 
@@ -582,6 +589,13 @@ async def execute_immediate_command(req: CreateAutomationRequest):
                         "reason": cat,
                     }
                 )
+            if route_data.get("needs_clarification"):
+                return {
+                    "id": "temp-disambiguate",
+                    "status": "blocked",
+                    "clarification_prompt": route_data.get("clarifying_question"),
+                    "plan": None
+                }
             if route_data.get("lane") == "informational_query":
                 return await handle_informational_query(client, raw_text, route_data.get("target_action"))
 
@@ -731,3 +745,16 @@ async def resume_automation(automation_id: str, req: ResumeAutomationRequest):
             "plan": data.get("plan"),
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
+
+
+@app.get("/api/v1/budget")
+async def get_budget():
+    from .db import get_provider_usage_today
+    usage = get_provider_usage_today()
+    return {"usage": usage}
+
+@app.get("/api/v1/templates")
+async def get_templates():
+    from .db import get_templates as db_get_templates
+    templates = db_get_templates()
+    return {"templates": templates}

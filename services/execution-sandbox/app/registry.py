@@ -1,3 +1,9 @@
+from .actions.send_slack_webhook import SlackWebhookParams, send_slack_webhook
+from .actions.send_discord_webhook import DiscordWebhookParams, send_discord_webhook
+from .actions.create_calendar_event import CreateCalendarEventParams, create_calendar_event
+from .actions.append_google_sheet_row import AppendSheetRowParams, append_google_sheet_row
+from .actions.send_sms import SendSMSParams, send_sms
+from .actions.list_running_applications import list_running_applications, EmptyParams
 from typing import Any, Callable, Dict, List, Tuple, Type
 from pydantic import BaseModel, ValidationError
 
@@ -42,6 +48,14 @@ REGISTRY: Dict[str, Tuple[Type[BaseModel], Callable]] = {
     "browser_list_open_tabs": (BrowserListTabsParams, browser_list_open_tabs),
     "browser_close_tab": (BrowserCloseTabParams, browser_close_tab),
     "browser_clear_managed_cache": (BrowserClearCacheParams, browser_clear_managed_cache),
+
+    "send_slack_webhook": (SlackWebhookParams, send_slack_webhook),
+    "send_discord_webhook": (DiscordWebhookParams, send_discord_webhook),
+    "create_calendar_event": (CreateCalendarEventParams, create_calendar_event),
+    "append_google_sheet_row": (AppendSheetRowParams, append_google_sheet_row),
+    "send_sms": (SendSMSParams, send_sms),
+    "list_running_applications": (EmptyParams, list_running_applications),
+
 }
 
 ACTION_DESCRIPTIONS: Dict[str, str] = {

@@ -494,26 +494,33 @@ class ProviderChain(LLMProvider):
         self.providers = providers
 
     async def complete_structured(self, prompt: str, schema: Type[BaseModel]) -> BaseModel:
+        from .db import increment_provider_usage, log_audit_event
+        from .quota import should_preemptively_skip
         last_error = None
         for p in self.providers:
+            provider_name = p.__class__.__name__
+            if should_preemptively_skip(provider_name):
+                logger.warning(f"Preemptively skipping provider {provider_name} due to quota")
+                log_audit_event("provider_preemptive_skip", {"provider": provider_name})
+                continue
+            
             # Retry loop for malformed JSON output (cap 2 attempts)
             for attempt in range(2):
                 try:
                     retry_prompt = prompt if attempt == 0 else f"{prompt}\nNote: Previous response had invalid JSON format. Ensure output strictly adheres to schema."
+                    increment_provider_usage(provider_name)
                     result = await p.complete_structured(retry_prompt, schema)
                     return result
                 except (RateLimitError, ProviderUnavailableError) as e:
                     last_error = e
-                    provider_name = p.__class__.__name__
                     logger.warning(f"Failover triggered for provider {provider_name}: {e}")
                     log_audit_event("provider_failover", {"provider": provider_name, "error": str(e)})
                     break  # Break out to next provider
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"Error on attempt {attempt+1} with provider {p.__class__.__name__}: {e}")
+                    logger.warning(f"Error on attempt {attempt+1} with provider {provider_name}: {e}")
                     if attempt == 1:
                         # After 2 failed attempts on this provider, failover
-                        provider_name = p.__class__.__name__
                         log_audit_event("provider_failover", {"provider": provider_name, "error": str(e)})
                         break
 

@@ -28,6 +28,8 @@ class RouteResponse(BaseModel):
     refusal: Optional[str] = None
     target_action: Optional[str] = None
     target_params: Optional[Dict[str, Any]] = None
+    needs_clarification: bool = False
+    clarifying_question: Optional[str] = None
 
 
 # Priority 0: Credential Exfiltration Patterns (§10.6 fixed refusal)
@@ -107,6 +109,16 @@ async def route_request(body: RouteRequest) -> RouteResponse:
         return RouteResponse(lane="automation", reason="Empty text routed to parser fallback")
 
     text_lower = text.lower()
+
+    # Phase 12 disambiguation
+    if re.search(r"how many.*tasks.*running|what.*tasks.*running", text_lower):
+        return RouteResponse(
+            lane="informational_query",
+            reason="Ambiguous 'tasks' query",
+            needs_clarification=True,
+            clarifying_question="Do you mean apps running on your computer, tabs open in your browser, or your own active automations?"
+        )
+
 
     # 0. Deterministic credential check (§10.6 fixed refusal)
     for pat in CREDENTIAL_PATTERNS:
