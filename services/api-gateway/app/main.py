@@ -354,12 +354,12 @@ async def create_automation(req: CreateAutomationRequest):
                 
                 # Informational query lane
                 if route_data.get("needs_clarification"):
-                return {
-                    "id": "temp-disambiguate",
-                    "status": "blocked",
-                    "clarification_prompt": route_data.get("clarifying_question"),
-                    "plan": None
-                }
+                    return {
+                        "id": "temp-disambiguate",
+                        "status": "blocked",
+                        "clarification_prompt": route_data.get("clarifying_question"),
+                        "plan": None
+                    }
             if route_data.get("lane") == "informational_query":
                     logger.info(f"Routing to informational query handler: target_action={route_data.get('target_action')}")
                     return await handle_informational_query(client, raw_text, route_data.get("target_action"))

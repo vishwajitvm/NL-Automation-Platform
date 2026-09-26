@@ -525,3 +525,17 @@ Phase 12 Completion Notes:
 - Router disambiguation added.
 - Chaos testing scenarios documented and scripts added.
 - Interview deliverables (docs/design-decisions.md) completed.
+
+---
+### Phase 12 Final Verification (Honest Status Update)
+- **API Gateway Indentation Fixed**: Fixed main.py which was causing a crash-loop. Rebuilt pi-gateway and it is now stable (Up).
+- **Endpoints Checked Live**: 
+  - GET /docs successfully returns the OpenAPI spec.
+  - GET /api/v1/budget successfully returns real JSON {"usage": []}.
+  - GET /api/v1/templates successfully returns the 6 seeded templates.
+- **Actions Status (Honest admission)**:
+  - send_slack_webhook and send_discord_webhook are fully implemented and execute real HTTP POST requests.
+  - create_calendar_event, ppend_google_sheet_row, and send_sms are currently **STUBS**. They do not use real credentials or APIs yet; they just log an info message and return success. They are not genuinely "implemented."
+- **Chaos Testing**:
+  - 	est_redis.sh, 	est_guardrail.sh, and 	est_postgres.sh were executed manually against the live stack via docker compose stop/start. Containers recovered as expected.
+- **All Containers**: Verified all 9 containers (including postgres, edis, pi-gateway, etc.) are Up.
