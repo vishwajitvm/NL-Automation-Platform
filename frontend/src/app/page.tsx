@@ -675,12 +675,12 @@ export default function Home() {
                 <div className="space-y-4">
                   {/* Status Banner */}
                   <div className={`p-4 rounded-xl border flex items-center justify-between ${
-                    composerResult.status === "active"
-                      ? "bg-emerald-950/20 border-emerald-800/60 text-emerald-200"
+                    (composerResult.status === "active" || composerResult.status === "executed")
+                        ? "bg-emerald-950/20 border-emerald-800/60 text-emerald-200"
                       : "bg-amber-950/20 border-amber-800/60 text-amber-200"
                   }`}>
                     <div className="flex items-center space-x-3">
-                      {composerResult.status === "active" ? (
+                      {(composerResult.status === "active" || composerResult.status === "executed") ? (
                         <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                       ) : (
                         <AlertTriangle className="w-5 h-5 text-amber-400" />
@@ -691,8 +691,10 @@ export default function Home() {
                         </div>
                         <div className="text-xs opacity-90">
                           {composerResult.status === "active"
-                            ? "Automation registered & active in trigger runtime"
-                            : "Paused at LangGraph checkpoint: Clarification required"}
+                              ? "Automation registered & active in trigger runtime"
+                              : composerResult.status === "executed"
+                              ? "Command executed successfully"
+                              : "Paused at LangGraph checkpoint: Clarification required"}
                         </div>
                       </div>
                     </div>
